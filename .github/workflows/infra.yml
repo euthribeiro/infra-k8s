@@ -42,8 +42,7 @@ jobs:
       - name: Terraform Apply Infra
         id: infra
         run: |
-          terraform -chdir=terraform/infra apply -auto-approve \
-            --var='acm_domains=["api.bgt3.com.br"]'
+          terraform -chdir=terraform/infra apply -auto-approve
           {
             echo "cluster_name=$(terraform -chdir=terraform/infra output -raw cluster_name)"
             echo "acm_certificate_arn=$(terraform -chdir=terraform/infra output -raw acm_certificate_arn)"

@@ -7,6 +7,7 @@ resource "aws_ecr_repository" "wrench_repo" {
 
   name                 = "wrench/${each.value}"
   image_tag_mutability = "IMMUTABLE_WITH_EXCLUSION"
+  force_delete         = true
 
   image_tag_mutability_exclusion_filter {
     filter      = "latest*"
@@ -24,11 +25,11 @@ resource "aws_ecr_repository" "wrench_repo" {
   }
 
   image_scanning_configuration {
-    scan_on_push = true # Automatically scans images for vulnerabilities on push
+    scan_on_push = true
   }
 
   encryption_configuration {
-    encryption_type = "AES256" # Protects your images at rest
+    encryption_type = "AES256"
   }
 
   tags = var.main_tags

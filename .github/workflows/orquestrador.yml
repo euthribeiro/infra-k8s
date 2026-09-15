@@ -17,7 +17,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: orquestrador-provisionamento
+  group: orquestrador-ambiente
   cancel-in-progress: false
 
 env:
@@ -51,7 +51,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Disparar e aguardar
-        run: bash "$DISPARAR" "$OWNER/infra-k8s" ci-cd.yml master -f etapa=sem-dns
+        run: bash "$DISPARAR" "$OWNER/infra-k8s" ci-cd.yml master -f etapa=completo
 
   infra-db:
     name: 2. Banco de dados
@@ -94,14 +94,30 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - name: Habilitar grants e aplicar roles
+      - name: Habilitar grants dos ambientes implantados e aplicar roles
+        env:
+          AMBIENTES: ${{ inputs.ambientes }}
+          ETAPA_BANCO: ${{ needs.infra-db.result }}
         run: |
-          ATUAL=$(gh variable get LAMBDA_AUTH_COLUMN_GRANTS_ENABLED --repo "$OWNER/infra-db" 2>/dev/null || echo false)
-          if [ "$ATUAL" = "true" ] && [ "${{ needs.infra-db.result }}" = "success" ]; then
+          case "$AMBIENTES" in
+            ambos) VARIAVEIS=(LAMBDA_AUTH_GRANTS_PRODUCTION LAMBDA_AUTH_GRANTS_HOMOLOGACAO) ;;
+            production) VARIAVEIS=(LAMBDA_AUTH_GRANTS_PRODUCTION) ;;
+            homologacao) VARIAVEIS=(LAMBDA_AUTH_GRANTS_HOMOLOGACAO) ;;
+            *) echo "::error::Ambiente inválido: $AMBIENTES"; exit 1 ;;
+          esac
+          MUDOU=false
+          for variavel in "${VARIAVEIS[@]}"; do
+            ATUAL=$(gh variable get "$variavel" --repo "$OWNER/infra-db" 2>/dev/null || echo false)
+            if [ "$ATUAL" != "true" ]; then
+              gh variable set "$variavel" --body true --repo "$OWNER/infra-db"
+              echo "$variavel: $ATUAL -> true"
+              MUDOU=true
+            fi
+          done
+          if [ "$MUDOU" = "false" ] && [ "$ETAPA_BANCO" = "success" ]; then
             echo "Grants já habilitados e aplicados na etapa 2."
             exit 0
           fi
-          gh variable set LAMBDA_AUTH_COLUMN_GRANTS_ENABLED --body true --repo "$OWNER/infra-db"
           bash "$DISPARAR" "$OWNER/infra-db" ci-cd.yml master
 
   lambda-auth:
@@ -118,14 +134,3 @@ jobs:
       - uses: actions/checkout@v4
       - name: Disparar e aguardar
         run: bash "$DISPARAR" "$OWNER/lambda-auth" ci-cd.yml "${{ matrix.ambiente == 'production' && 'master' || 'develop' }}"
-
-  dns:
-    name: 7. DNS da aplicação
-    needs: [validar, app-homologacao, app-producao]
-    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && inputs.infraestrutura }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - name: Disparar e aguardar
-        run: bash "$DISPARAR" "$OWNER/infra-k8s" ci-cd.yml master -f etapa=somente-dns

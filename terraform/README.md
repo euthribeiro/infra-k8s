@@ -83,7 +83,8 @@ Quem consome o quê:
 | Output | Consumidor |
 | ------ | ---------- |
 | `vpc_id`, `public_subnet_ids` | `infra-db`, stack `rds/` |
-| `cluster_name`, `acm_certificate_arn` | `app-k8s`, job de deploy |
+| `cluster_name` | `app-k8s`, job de deploy; job `gateway` deste repositório |
+| `acm_certificate_arn` | job `gateway` deste repositório (listener HTTPS do Gateway de plataforma) |
 | `oidc_provider_arn`, `oidc_provider_host` | stack `email/` |
 | `app_hostnames` | stack `dns/` |
 
@@ -91,8 +92,7 @@ Quem consome o quê:
 
 ```bash
 terraform -chdir=terraform/infra init -upgrade
-terraform -chdir=terraform/infra apply \
-  --var='acm_domains=["api.bgt3.com.br"]'
+terraform -chdir=terraform/infra apply
 ```
 
 > `init -upgrade` é necessário na primeira vez (providers `helm`/`tls`/`kubectl`/`http`).
@@ -151,9 +151,9 @@ Workspace HCP: **`wrench_auto_repair_email`**. Provisiona o envio de e-mail tran
 | `aws_iam_role.app_ses_irsa` (+ policy `ses:SendEmail`) | **Role IRSA** que a ServiceAccount da app assume para enviar (`create_irsa_role = true`, padrão) |
 | `aws_iam_user.app_ses` + access key                    | Alternativa por chave estática (`create_smtp_user = true`, desligado por padrão)                 |
 
-A trust policy da role IRSA libera exatamente `system:serviceaccount:production:wrench-api-sa` —
-os valores de namespace e ServiceAccount precisam casar com o chart Helm do `app-k8s`. O OIDC
-provider é lido do state da `infra/`.
+A trust policy da role IRSA libera a ServiceAccount `wrench-api-sa` nos namespaces de
+`k8s_namespaces` (padrão `production` e `homologacao`) — os valores precisam casar com o chart
+Helm do `app-k8s`. O OIDC provider é lido do state da `infra/`.
 
 Output principal: `app_ses_irsa_role_arn` (injetado no chart via
 `--set serviceAccount.roleArn=...`).
@@ -180,14 +180,15 @@ aplicação para o ALB provisionado pelo Load Balancer Controller.
 | Recurso                     | O que faz                                                           |
 | --------------------------- | ------------------------------------------------------------------- |
 | `data.aws_lb.gateway`       | Descobre o ALB do Gateway pela tag `elbv2.k8s.aws/cluster`          |
-| `cloudflare_dns_record.app` | CNAME (`api.bgt3.com.br` → DNS do ALB), um por hostname não-curinga |
+| `cloudflare_dns_record.app` | CNAME (`api.bgt3.com.br` e `hml-api.bgt3.com.br` → DNS do ALB), um por hostname não-curinga |
 
 ### Por que um state separado
 
-O CNAME depende do ALB, que só existe **depois** do deploy da aplicação via Helm (o Load Balancer
-Controller cria o ALB ao ver o `Gateway`). Se o DNS ficasse no state da `infra/` — que roda
-**antes** do Helm — cada `apply` da infra destruiria e recriaria o registro. Com o state isolado,
-a `infra/` nunca toca no CNAME e o `dns/` é idempotente: cria na primeira vez e é _no-op_ depois.
+O CNAME depende do ALB, que só existe **depois** que o Gateway de plataforma é aplicado no cluster
+(o Load Balancer Controller cria o ALB ao ver o `Gateway`). O Gateway é aplicado por `kubectl`, fora
+do Terraform, depois da `infra/`; por isso o DNS não pode estar no mesmo state. Com o state
+isolado, a `infra/` nunca toca no CNAME e o `dns/` é idempotente: cria na primeira vez e é _no-op_
+depois.
 
 ### Como aplicar
 
@@ -196,8 +197,9 @@ terraform -chdir=terraform/dns init
 terraform -chdir=terraform/dns apply
 ```
 
-> Só deve rodar **depois** que o Gateway já tem endereço (ALB pronto). No pipeline do `app-k8s`
-> isso é garantido pelo passo `kubectl wait --for=condition=Programmed gateway/bgt3-gw`.
+> Só deve rodar **depois** que o Gateway já tem endereço (ALB pronto). No pipeline deste
+> repositório isso é garantido pelo job `gateway`, que executa
+> `kubectl wait --for=condition=Programmed gateway/bgt3-gw -n gateway` antes do job `dns`.
 
 ---
 
@@ -282,21 +284,23 @@ depois do `infra/`, com os values de [`newrelic-k8s/`](../newrelic-k8s/README.md
 Ponta a ponta, atravessando os quatro repositórios:
 
 ```
-1. infra-k8s  terraform/infra        # VPC, EKS, controllers, ACM
-2. infra-k8s  terraform/ecr          # repositórios de imagem/chart   ┐ paralelizáveis
-   infra-db   terraform/rds          # instância RDS                   │ após a infra
-   infra-k8s  terraform/email        # SES + IRSA                      ┘
-3. infra-db   terraform/roles        # role de menor privilégio no Postgres
-4. app-k8s    Helm (wrench-api-k8s)  # deploy da app -> cria o Gateway -> ALB
-5. app-k8s    kubectl wait Gateway   # espera o ALB ficar Programmed
-6. infra-k8s  terraform/dns          # CNAME público -> ALB
-7. lambda-auth                       # Lambda e API Gateway
-8. infra-k8s  Helm (nri-bundle)      # agente New Relic no cluster, após o passo 1
-9. infra-k8s  terraform/observability # dashboard, alertas e synthetic; independe da AWS
+1. infra-k8s  terraform/infra         # VPC, EKS, controllers, ACM
+2. infra-k8s  kubernetes/gateway      # Gateway de plataforma -> ALB único
+3. infra-k8s  terraform/dns           # CNAMEs api e hml-api -> ALB
+4. infra-k8s  terraform/ecr, email    # paralelizáveis após a infra
+   infra-k8s  Helm (nri-bundle)       # agente New Relic no cluster
+   infra-k8s  terraform/observability # dashboard, alertas e synthetic; independe da AWS
+5. infra-db   terraform/rds           # instância RDS
+6. infra-db   terraform/roles         # roles e database de homologação
+7. app-k8s    Helm (wrench-api-k8s)   # homologação e produção: HTTPRoutes no Gateway
+8. infra-db   terraform/roles         # grants de coluna da Lambda por ambiente
+9. lambda-auth                        # Lambdas e API Gateway por ambiente
 ```
 
-Cada repositório orquestra a sua parte no próprio GitHub Actions; não há mais um workflow único
-coordenando tudo. Os valores atravessam a fronteira por remote state.
+Cada repositório aplica a sua parte no próprio GitHub Actions, e os valores atravessam a fronteira
+por remote state. O workflow **Orquestrador de Provisionamento** do `infra-k8s` executa a
+sequência inteira disparando o pipeline de cada repositório; o **Orquestrador de Destruição**
+percorre o caminho inverso. Ambos estão descritos no [README do repositório](../README.md).
 
 ## Pré-requisitos de HCP Terraform
 
@@ -310,7 +314,8 @@ coordenando tudo. Os valores atravessam a fronteira por remote state.
 
 ## Observação sobre HTTPS (ACM + Gateway)
 
-O HTTPS termina no ALB com o certificado do ACM. O AWS Load Balancer Controller **descobre o
-certificado pelo _hostname_** do listener do Gateway (não usa `certificateRefs`). Por isso os
-domínios em `var.acm_domains` (stack `infra/`) precisam casar com os hostnames usados no
-`Gateway`/`HTTPRoute` do chart Helm do `app-k8s`.
+O HTTPS termina no ALB com o certificado do ACM, informado como `defaultCertificate` da
+`LoadBalancerConfiguration` `bgt3-gw-lbconfig` do Gateway de plataforma (não usa
+`certificateRefs`). O certificado é um só para todos os hostnames atendidos pelo ALB, então
+`var.acm_domains` (stack `infra/`) precisa conter todos os hostnames das `HTTPRoute` publicadas
+pelo `app-k8s` — hoje `api.bgt3.com.br` e `hml-api.bgt3.com.br`.
