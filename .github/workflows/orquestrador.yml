@@ -1,0 +1,131 @@
+name: Orquestrador de Provisionamento
+
+on:
+  workflow_dispatch:
+    inputs:
+      ambientes:
+        description: 'Ambientes da aplicação e da Lambda'
+        type: choice
+        default: 'ambos'
+        options: ['ambos', 'homologacao', 'production']
+      infraestrutura:
+        description: 'Aplicar infra-k8s e infra-db antes da aplicação'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: orquestrador-provisionamento
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ secrets.ORQUESTRADOR_TOKEN }}
+  OWNER: ${{ github.repository_owner }}
+  DISPARAR: .github/scripts/disparar-workflow.sh
+
+jobs:
+  validar:
+    name: Validar acesso aos repositórios
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verificar token e repositórios
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Cadastre o secret ORQUESTRADOR_TOKEN no infra-k8s."
+            exit 1
+          fi
+          for repositorio in infra-k8s infra-db app-k8s lambda-auth; do
+            gh api "repos/$OWNER/$repositorio/actions/workflows" --jq '.total_count' > /dev/null
+            echo "ok: $OWNER/$repositorio"
+          done
+          echo "### Provisionamento — ambientes: ${{ inputs.ambientes }}" >> "$GITHUB_STEP_SUMMARY"
+
+  infra-k8s:
+    name: 1. Infraestrutura Kubernetes
+    needs: validar
+    if: inputs.infraestrutura
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Disparar e aguardar
+        run: bash "$DISPARAR" "$OWNER/infra-k8s" ci-cd.yml master -f etapa=sem-dns
+
+  infra-db:
+    name: 2. Banco de dados
+    needs: [validar, infra-k8s]
+    if: inputs.infraestrutura
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Disparar e aguardar
+        run: bash "$DISPARAR" "$OWNER/infra-db" ci-cd.yml master
+
+  app-homologacao:
+    name: 3. Aplicação — homologação
+    needs: [validar, infra-k8s, infra-db]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && (inputs.ambientes == 'ambos' || inputs.ambientes == 'homologacao') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Disparar e aguardar
+        run: bash "$DISPARAR" "$OWNER/app-k8s" ci-cd.yml develop
+
+  app-producao:
+    name: 4. Aplicação — produção
+    needs: [validar, infra-k8s, infra-db, app-homologacao]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && (inputs.ambientes == 'ambos' || inputs.ambientes == 'production') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Disparar e aguardar
+        run: bash "$DISPARAR" "$OWNER/app-k8s" ci-cd.yml master
+
+  grants-lambda:
+    name: 5. Grants de coluna da Lambda
+    needs: [validar, infra-k8s, infra-db, app-homologacao, app-producao]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Habilitar grants e aplicar roles
+        run: |
+          ATUAL=$(gh variable get LAMBDA_AUTH_COLUMN_GRANTS_ENABLED --repo "$OWNER/infra-db" 2>/dev/null || echo false)
+          if [ "$ATUAL" = "true" ] && [ "${{ needs.infra-db.result }}" = "success" ]; then
+            echo "Grants já habilitados e aplicados na etapa 2."
+            exit 0
+          fi
+          gh variable set LAMBDA_AUTH_COLUMN_GRANTS_ENABLED --body true --repo "$OWNER/infra-db"
+          bash "$DISPARAR" "$OWNER/infra-db" ci-cd.yml master
+
+  lambda-auth:
+    name: 6. Lambda e API Gateway
+    needs: [validar, grants-lambda]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        ambiente: ${{ fromJSON(inputs.ambientes == 'ambos' && '["homologacao","production"]' || format('["{0}"]', inputs.ambientes)) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Disparar e aguardar
+        run: bash "$DISPARAR" "$OWNER/lambda-auth" ci-cd.yml "${{ matrix.ambiente == 'production' && 'master' || 'develop' }}"
+
+  dns:
+    name: 7. DNS da aplicação
+    needs: [validar, app-homologacao, app-producao]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && inputs.infraestrutura }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Disparar e aguardar
+        run: bash "$DISPARAR" "$OWNER/infra-k8s" ci-cd.yml master -f etapa=somente-dns

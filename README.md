@@ -154,9 +154,50 @@ O workflow `destroy.yml` derruba a infraestrutura e é acionado apenas manualmen
 | `NEW_RELIC_API_KEY` | secret | User API Key (`NRAK-...`), usada pelo provider Terraform do stack `observability` |
 | `NEW_RELIC_ACCOUNT_ID` | secret | ID da conta New Relic |
 | `NEW_RELIC_ALERT_EMAIL` | variable | E-mail que recebe as notificações de alerta |
+| `ORQUESTRADOR_TOKEN` | secret | Fine-grained token usado pelo orquestrador para disparar e acompanhar os pipelines dos quatro repositórios |
 
 Credenciais AWS e variáveis específicas de stack são configuradas diretamente nos workspaces do
 HCP Terraform.
+
+## Orquestrador de provisionamento
+
+O workflow **Orquestrador de Provisionamento** (`.github/workflows/orquestrador.yml`) sobe o
+ambiente completo a partir de um único *Run workflow*. Ele não aplica nada diretamente: dispara o
+pipeline de cada repositório, acompanha a execução e só avança quando ela termina com sucesso. Cada
+pipeline roda no próprio repositório, com os próprios secrets, e aparece normalmente na aba Actions
+dele.
+
+```mermaid
+flowchart LR
+    V["Validar token"] --> K["1. infra-k8s<br/>etapa=sem-dns"]
+    K --> D["2. infra-db<br/>RDS e roles"]
+    D --> H["3. app-k8s<br/>develop"]
+    H --> P["4. app-k8s<br/>master"]
+    P --> G["5. infra-db<br/>grants da Lambda"]
+    G --> L["6. lambda-auth<br/>develop e master"]
+    P --> N["7. infra-k8s<br/>etapa=somente-dns"]
+```
+
+| Entrada | Valores | Efeito |
+|---|---|---|
+| `ambientes` | `ambos`, `homologacao`, `production` | Quais ambientes da aplicação e da Lambda são implantados |
+| `infraestrutura` | `true`, `false` | Com `false`, pula as etapas 1, 2 e 7 e implanta só aplicação, grants e Lambda |
+
+Restrições:
+
+* A ordem é imposta pelos states do HCP Terraform: o `infra-db` lê a rede do `infra-k8s`, a
+  aplicação lê cluster e banco, a Lambda lê o banco e depende das tabelas criadas pelas migrations,
+  e o CNAME da API só existe depois que o ALB é criado pelo deploy.
+* A etapa 5 grava `LAMBDA_AUTH_COLUMN_GRANTS_ENABLED=true` no `infra-db` antes de reaplicar os
+  roles, para que um push posterior não revogue os grants.
+* Uma falha interrompe as etapas seguintes; o resumo da execução lista o link de cada pipeline
+  disparado.
+* O secret `ORQUESTRADOR_TOKEN` é um *fine-grained personal access token* restrito aos repositórios
+  `infra-k8s`, `infra-db`, `app-k8s` e `lambda-auth`, com as permissões **Actions: Read and write**,
+  **Variables: Read and write** e **Contents: Read-only**. O `GITHUB_TOKEN` padrão não dispara
+  workflows em outros repositórios.
+* O pipeline `ci-cd.yml` do `infra-k8s` aceita a entrada `etapa`: `completo` (padrão e usado em
+  push), `sem-dns` ou `somente-dns`.
 
 ## Observabilidade
 

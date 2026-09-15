@@ -7,15 +7,23 @@ on:
   push:
     branches: ['master']
   workflow_dispatch:
+    inputs:
+      etapa:
+        description: 'completo aplica tudo; sem-dns aplica tudo exceto o CNAME da API; somente-dns aplica apenas o CNAME da API'
+        type: choice
+        default: completo
+        options: ['completo', 'sem-dns', 'somente-dns']
 
 jobs:
   main-infra:
+    if: inputs.etapa != 'somente-dns'
     uses: ./.github/workflows/infra.yml
     secrets: inherit
     with:
       environment: 'production'
 
   ecr-infra:
+    if: inputs.etapa != 'somente-dns'
     uses: ./.github/workflows/ecr-infra.yml
     secrets: inherit
     with:
@@ -40,6 +48,7 @@ jobs:
 
   dns:
     needs: main-infra
+    if: ${{ !cancelled() && inputs.etapa != 'sem-dns' && needs.main-infra.result != 'failure' }}
     uses: ./.github/workflows/dns.yml
     secrets: inherit
 
@@ -52,6 +61,7 @@ jobs:
       cluster_name: ${{ needs.main-infra.outputs.cluster_name }}
 
   observability:
+    if: inputs.etapa != 'somente-dns'
     uses: ./.github/workflows/observability.yml
     secrets: inherit
     with:
