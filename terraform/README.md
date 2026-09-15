@@ -55,7 +55,7 @@ Workspace HCP: **`wrench_auto_repair`**. É a base de tudo; as demais stacks —
 |                 | `aws_route_table.rt_public/rt_private` + associações          | Rotas público (IGW) e privado (NAT)                                          |
 |                 | `aws_security_group.sg`                                       | SG do cluster (libera 80/443 de entrada)                                     |
 | **EKS**         | `aws_eks_cluster.cluster`                                     | Cluster `eks-wrench-auto-repair` (authentication_mode `API`)                 |
-|                 | `aws_eks_node_group.node_group`                               | Node group `t3.medium`, discos 50 GB, escala 1–3 (desejado 1)                |
+|                 | `aws_eks_node_group.node_group`                               | Node group `t3.medium`, discos 50 GB, escala 1–3 (desejado 2)                |
 |                 | `aws_eks_access_entry` + `aws_eks_access_policy_association`  | Acesso admin do usuário IAM ao cluster                                       |
 | **IAM**         | `aws_iam_role.cluster` (+ attach `AmazonEKSClusterPolicy`)    | Role do control plane                                                        |
 |                 | `aws_iam_role.node_group_role` (+ 3 attachments)              | Role dos nós (Worker, CNI, ECR read-only)                                    |
