@@ -14,7 +14,7 @@ resource "newrelic_one_dashboard" "wrench" {
 
       nrql_query {
         account_id = var.newrelic_account_id
-        query      = "SELECT count(*) AS 'OS criadas' FROM Span WHERE ${local.filtro_servico} AND span.kind = 'server' AND http.route LIKE '%ordem-servico' AND coalesce(http.request.method, http.method) = 'POST' AND ${local.status_http} < 400 SINCE today"
+        query      = "SELECT count(*) AS 'OS criadas' FROM Span WHERE ${local.filtro_servico} AND span.kind = 'server' AND http.route LIKE '%ordem-servico' AND http.request.method = 'POST' AND ${local.status_http} < 400 SINCE today"
       }
     }
 
@@ -27,7 +27,7 @@ resource "newrelic_one_dashboard" "wrench" {
 
       nrql_query {
         account_id = var.newrelic_account_id
-        query      = "SELECT count(*) AS 'OS criadas' FROM Span WHERE ${local.filtro_servico} AND span.kind = 'server' AND http.route LIKE '%ordem-servico' AND coalesce(http.request.method, http.method) = 'POST' AND ${local.status_http} < 400 SINCE 30 days ago TIMESERIES 1 day"
+        query      = "SELECT count(*) AS 'OS criadas' FROM Span WHERE ${local.filtro_servico} AND span.kind = 'server' AND http.route LIKE '%ordem-servico' AND http.request.method = 'POST' AND ${local.status_http} < 400 SINCE 30 days ago TIMESERIES 1 day"
       }
     }
 
@@ -165,7 +165,7 @@ resource "newrelic_one_dashboard" "wrench" {
 
       nrql_query {
         account_id = var.newrelic_account_id
-        query      = "SELECT count(*) FROM Span WHERE ${local.filtro_servico} AND span.kind = 'client' AND db.system IS NULL AND (otel.status_code = 'ERROR' OR ${local.status_http} >= 400) FACET coalesce(server.address, net.peer.name, http.url) SINCE 1 day ago TIMESERIES 1 hour"
+        query      = "SELECT count(*) FROM Span WHERE ${local.filtro_servico} AND span.kind = 'client' AND db.system IS NULL AND (otel.status_code = 'ERROR' OR ${local.status_http} >= 400) FACET server.address SINCE 1 day ago TIMESERIES 1 hour"
       }
     }
 
