@@ -1,0 +1,58 @@
+name: Infraestrutura Kubernetes
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: ['master']
+  workflow_dispatch:
+
+jobs:
+  main-infra:
+    uses: ./.github/workflows/infra.yml
+    secrets: inherit
+    with:
+      environment: 'production'
+
+  ecr-infra:
+    uses: ./.github/workflows/ecr-infra.yml
+    secrets: inherit
+    with:
+      environment: 'production'
+
+  ses-infra:
+    needs: main-infra
+    uses: ./.github/workflows/ses.yml
+    secrets: inherit
+    with:
+      environment: 'production'
+
+  structurizr:
+    needs: [main-infra, ecr-infra]
+    uses: ./.github/workflows/structurizr.yml
+    secrets: inherit
+    with:
+      environment: 'production'
+      cluster_name: ${{ needs.main-infra.outputs.cluster_name }}
+      structurizr_chart_repository: ${{ needs.ecr-infra.outputs.structurizr_chart_repository }}
+      structurizr_chart_repository_url: ${{ needs.ecr-infra.outputs.structurizr_chart_repository_url }}
+
+  dns:
+    needs: main-infra
+    uses: ./.github/workflows/dns.yml
+    secrets: inherit
+
+  newrelic-k8s:
+    needs: main-infra
+    uses: ./.github/workflows/newrelic.yml
+    secrets: inherit
+    with:
+      environment: 'production'
+      cluster_name: ${{ needs.main-infra.outputs.cluster_name }}
+
+  observability:
+    uses: ./.github/workflows/observability.yml
+    secrets: inherit
+    with:
+      environment: 'production'

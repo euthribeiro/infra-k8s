@@ -1,0 +1,100 @@
+name: Deploy Structurizr
+
+env:
+  CHART_DIR: ./structurizr-k8s
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Ambiente de execução'
+        required: true
+        type: string
+
+      cluster_name:
+        description: 'Nome do cluster EKS.'
+        required: true
+        type: string
+
+      structurizr_chart_repository:
+        description: 'Caminho pai do endereço ECR para o repositório Helm'
+        required: true
+        type: string
+
+      structurizr_chart_repository_url:
+        description: 'O endereço completo do repositório ECR para o Helm'
+        required: true
+        type: string
+
+jobs:
+  structurizr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Definir versão (por SHA)
+        id: ver
+        run: echo "version=0.1.1-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Terraform Init Structurizr
+        run: terraform -chdir=terraform/structurizr init
+
+      - name: Terraform Apply Structurizr
+        id: strizr
+        run: |
+          terraform -chdir=terraform/structurizr apply -auto-approve
+          echo "tunnel_token=$(terraform -chdir=terraform/structurizr output -raw tunnel_token)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup AWS ECR Details
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{vars.AWS_REGION}}
+
+      - name: Login to Amazon ECR
+        id: login_aws_ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Kubeconfig for EKS
+        env:
+          CLUSTER_NAME: ${{ inputs.cluster_name }}
+        run: |
+          aws eks update-kubeconfig --region ${{ vars.AWS_REGION }} --name $CLUSTER_NAME
+
+      - name: Set up Helm CLI
+        uses: azure/setup-helm@v5
+
+      - name: Package and Push Helm to Amazon ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login_aws_ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ inputs.structurizr_chart_repository }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          helm package "$CHART_DIR" \
+          --version "$VERSION" \
+          --app-version "$VERSION"
+          CHART_PACKAGE=$(ls structurizr-*.tgz)
+          helm push "$CHART_PACKAGE" oci://$ECR_REPOSITORY
+
+      - name: Helm Deploy
+        env:
+          ECR_REGISTRY: ${{ steps.login_aws_ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ inputs.structurizr_chart_repository_url  }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          REGION: ${{ vars.AWS_REGION }}
+          ENVIRONMENT: 'structurizr'
+          TUNNEL_TOKEN: ${{ steps.strizr.outputs.tunnel_token }}
+        run: |
+          helm upgrade --install structurizr \
+            oci://$ECR_REPOSITORY \
+            --version $VERSION \
+            -n $ENVIRONMENT --create-namespace \
+            --set tunnelToken=$TUNNEL_TOKEN

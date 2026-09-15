@@ -1,0 +1,50 @@
+name: Infraestrutura Principal (VPC, EKS, ACM)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Ambiente de execução'
+        required: true
+        type: string
+
+    outputs:
+      cluster_name:
+        description: 'Nome do cluster EKS'
+        value: ${{ jobs.infra.outputs.cluster_name }}
+
+      acm_certificate_arn:
+        description: 'ARN do certificado ACM da aplicação'
+        value: ${{ jobs.infra.outputs.acm_certificate_arn }}
+
+jobs:
+  infra:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+
+    outputs:
+      cluster_name: ${{ steps.infra.outputs.cluster_name }}
+      acm_certificate_arn: ${{ steps.infra.outputs.acm_certificate_arn }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Terraform Init Infra
+        run: terraform -chdir=terraform/infra init
+
+      - name: Terraform Apply Infra
+        id: infra
+        run: |
+          terraform -chdir=terraform/infra apply -auto-approve \
+            --var='acm_domains=["api.bgt3.com.br"]'
+          {
+            echo "cluster_name=$(terraform -chdir=terraform/infra output -raw cluster_name)"
+            echo "acm_certificate_arn=$(terraform -chdir=terraform/infra output -raw acm_certificate_arn)"
+          } >> "$GITHUB_OUTPUT"

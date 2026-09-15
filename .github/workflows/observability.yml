@@ -1,0 +1,48 @@
+name: Observabilidade (Dashboards, Alertas e Synthetics New Relic)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Ambiente de execução'
+        required: true
+        type: string
+
+    outputs:
+      dashboard_permalink:
+        description: 'Link do dashboard no New Relic'
+        value: ${{ jobs.observability.outputs.dashboard_permalink }}
+
+jobs:
+  observability:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+
+    outputs:
+      dashboard_permalink: ${{ steps.apply.outputs.dashboard_permalink }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Terraform Init Observability
+        run: terraform -chdir=terraform/observability init -input=false
+
+      - name: Terraform Apply Observability
+        id: apply
+        env:
+          NEW_RELIC_API_KEY: ${{ secrets.NEW_RELIC_API_KEY }}
+          NEW_RELIC_ACCOUNT_ID: ${{ secrets.NEW_RELIC_ACCOUNT_ID }}
+          NEW_RELIC_ALERT_EMAIL: ${{ vars.NEW_RELIC_ALERT_EMAIL }}
+        run: |
+          terraform -chdir=terraform/observability apply -auto-approve -input=false \
+            -var="newrelic_api_key=$NEW_RELIC_API_KEY" \
+            -var="newrelic_account_id=$NEW_RELIC_ACCOUNT_ID" \
+            -var="alert_email=$NEW_RELIC_ALERT_EMAIL"
+          echo "dashboard_permalink=$(terraform -chdir=terraform/observability output -raw dashboard_permalink)" >> "$GITHUB_OUTPUT"

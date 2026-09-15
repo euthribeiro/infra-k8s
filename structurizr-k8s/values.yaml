@@ -1,0 +1,44 @@
+# Namespace onde todos os recursos do chart são criados.
+namespace: structurizr
+
+# Hostname público (deve casar com o ingress do tunnel no terraform/structurizr).
+hostname: structurizr-wrench-api.bgt3.com.br
+
+# ----------------------------------------------------------------------------
+# Structurizr Lite
+# ----------------------------------------------------------------------------
+lite:
+  image:
+    # structurizr/lite foi descontinuado (só imprime aviso e sai). O substituto
+    # gratuito é structurizr/structurizr rodando em modo "local" (ver args no
+    # Deployment).
+    repository: structurizr/structurizr
+    tag: latest
+    pullPolicy: IfNotPresent
+  # NÃO aumente: o Lite é single-user. Sempre 1 réplica, sem HPA.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+
+# ----------------------------------------------------------------------------
+# Conector do Cloudflare Tunnel
+# ----------------------------------------------------------------------------
+cloudflared:
+  image:
+    repository: cloudflare/cloudflared
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicas: 2 # stateless; 2 = alta disponibilidade do conector
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 128Mi
+
+# Token do conector do tunnel. Vem do output do Terraform (terraform/structurizr)
+# e é injetado pelo CI com --set tunnelToken=... É OBRIGATÓRIO.
+tunnelToken: ''

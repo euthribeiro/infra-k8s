@@ -1,0 +1,64 @@
+name: Agente New Relic no Cluster EKS
+
+env:
+  VALUES_FILE: ./newrelic-k8s/values.yaml
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Ambiente de execução'
+        required: true
+        type: string
+
+      cluster_name:
+        description: 'Nome do cluster EKS.'
+        required: true
+        type: string
+
+jobs:
+  newrelic-bundle:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Set up Kubeconfig for EKS
+        env:
+          CLUSTER_NAME: ${{ inputs.cluster_name }}
+        run: aws eks update-kubeconfig --region ${{ vars.AWS_REGION }} --name "$CLUSTER_NAME"
+
+      - name: Set up Helm CLI
+        uses: azure/setup-helm@v5
+
+      - name: Helm Deploy nri-bundle
+        env:
+          CLUSTER_NAME: ${{ inputs.cluster_name }}
+          NEW_RELIC_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
+        run: |
+          if [ -z "$NEW_RELIC_LICENSE_KEY" ]; then
+            echo "::error::Secret NEW_RELIC_LICENSE_KEY não configurado."
+            exit 1
+          fi
+          helm repo add newrelic https://helm-charts.newrelic.com
+          helm repo update newrelic
+          helm upgrade --install newrelic-bundle newrelic/nri-bundle \
+            -n newrelic --create-namespace \
+            -f "$VALUES_FILE" \
+            --set global.cluster="$CLUSTER_NAME" \
+            --set global.licenseKey="$NEW_RELIC_LICENSE_KEY" \
+            --wait --timeout 10m
+
+      - name: Verificar DaemonSet do agente
+        run: |
+          kubectl -n newrelic get daemonset
+          kubectl -n newrelic get pods

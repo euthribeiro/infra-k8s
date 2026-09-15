@@ -1,0 +1,10 @@
+Structurizr Lite implantado no namespace "{{ .Values.namespace }}".
+
+Acesso público (via Cloudflare Tunnel):
+  https://{{ .Values.hostname }}
+
+Verifique os pods:
+  kubectl get pods -n {{ .Values.namespace }}
+
+Verifique o conector do tunnel:
+  kubectl logs -n {{ .Values.namespace }} deploy/cloudflared

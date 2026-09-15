@@ -1,0 +1,20 @@
+# Copie para terraform.tfvars e preencha. NAO commite o .tfvars real.
+# (No HCP Terraform, defina como Terraform Variables no workspace do email.)
+
+# Dominio verificado no SES = seu dominio no Cloudflare.
+domain_name = "wrenchautorepair.com"
+
+# Cloudflare > pagina do dominio > Overview (coluna direita) = Zone ID.
+cloudflare_zone_id = "0123456789abcdef0123456789abcdef"
+
+# Cloudflare > My Profile > API Tokens > Create Token
+# Permissao: Zone > DNS > Edit, restrito a esta zona. Marque como sensivel.
+cloudflare_api_token = "seu_token_aqui"
+
+# Opcionais (ja tem default):
+# region_default             = "us-east-1"
+# configuration_set_name     = "wrench-email"
+# reputation_metrics_enabled = false
+# sending_enabled            = true
+# custom_redirect_domain     = ""      # "" desabilita tracking
+# create_smtp_user           = true    # false se for usar IRSA no EKS

@@ -1,0 +1,38 @@
+name: Criação do SES (Simple Email Service)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Ambiente de execução'
+        required: true
+        type: string
+
+    outputs:
+      app_ses_irsa_role_arn:
+        description: 'ARN da permissão para o cluster se comunicar com o serviço SES da AWS.'
+        value: ${{ jobs.ses.outputs.app_ses_irsa_role_arn }}
+
+jobs:
+  ses:
+    runs-on: ubuntu-latest
+    outputs:
+      app_ses_irsa_role_arn: ${{ steps.email.outputs.app_ses_irsa_role_arn }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Terraform Init Email
+        run: terraform -chdir=terraform/email init
+
+      - name: Terraform Apply E-mail
+        id: email
+        run: |
+          terraform -chdir=terraform/email apply -auto-approve
+          echo "app_ses_irsa_role_arn=$(terraform -chdir=terraform/email output -raw app_ses_irsa_role_arn)" >> "$GITHUB_OUTPUT"

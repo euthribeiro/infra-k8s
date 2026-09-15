@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: structurizr-lite
+  namespace: structurizr
+spec:
+  # IMPORTANTE: o Lite é single-user; NÃO escale (sem HPA, sempre 1 réplica).
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: structurizr-lite
+  template:
+    metadata:
+      labels:
+        app: structurizr-lite
+    spec:
+      # initContainer copia o DSL (ConfigMap, read-only) para um emptyDir gravável.
+      # Assim o Lite funciona normal (grava o layout no emptyDir), mas nada persiste:
+      # a cada restart o workspace volta ao DSL do ConfigMap -> efeito "view-only".
+      initContainers:
+        - name: seed-workspace
+          image: busybox:1.36
+          command: ['sh', '-c', 'cp /config/workspace.dsl /data/workspace.dsl']
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: data
+              mountPath: /data
+      containers:
+        - name: structurizr-lite
+          # structurizr/lite foi descontinuado; usa-se structurizr/structurizr
+          # em modo "local" (substituto gratuito do Lite).
+          image: structurizr/structurizr:latest
+          args: ['local']
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: data
+              mountPath: /usr/local/structurizr
+          resources:
+            requests:
+              cpu: '100m'
+              memory: '512Mi'
+            limits:
+              memory: '1Gi'
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 40
+            periodSeconds: 30
+      volumes:
+        - name: config
+          configMap:
+            name: structurizr-workspace
+        - name: data
+          emptyDir: {}

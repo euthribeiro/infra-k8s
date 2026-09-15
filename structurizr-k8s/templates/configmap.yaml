@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: structurizr-workspace
+  namespace: {{ .Values.namespace }}
+data:
+  workspace.dsl: |
+{{ .Files.Get "files/workspace.dsl" | indent 4 }}

@@ -1,0 +1,23 @@
+name: Associação do DNS ao Cluster EKS
+
+on:
+  workflow_call:
+
+jobs:
+  dns:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Terraform Init DNS
+        run: terraform -chdir=terraform/dns init
+
+      - name: Terraform Apply DNS
+        run: terraform -chdir=terraform/dns apply -auto-approve

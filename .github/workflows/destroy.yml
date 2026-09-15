@@ -1,0 +1,61 @@
+name: Desligar infraestrutura
+
+on:
+  workflow_dispatch:
+
+jobs:
+  destroy:
+    runs-on: ubuntu-latest
+    env:
+      ENVIRONMENT: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Terraform Init DNS
+        run: terraform -chdir=terraform/dns init
+
+      - name: Terraform Destroy DNS
+        run: terraform -chdir=terraform/dns apply -destroy -auto-approve
+
+      - name: Terraform Init SES
+        run: terraform -chdir=terraform/email init
+
+      - name: Terraform Destroy SES
+        run: |
+          terraform -chdir=terraform/email apply -destroy -auto-approve
+
+      - name: Terraform Destroy SES
+        run: |
+          terraform -chdir=terraform/email apply -destroy -auto-approve
+
+      - name: Terraform Init Infra
+        run: terraform -chdir=terraform/infra init
+
+      - name: Terraform Destroy Infra
+        id: infra
+        env:
+          MASTER_DB_USERNAME: ${{ secrets.rds_master_username }}
+          MASTER_DB_PASSWORD: ${{ secrets.rds_master_password }}
+        run: |
+          terraform -chdir=terraform/infra apply -destroy -auto-approve \
+          --var='acm_domains=["api.bgt3.com.br"]' \
+          --var="rds_database_username=$MASTER_DB_USERNAME" \
+          --var="rds_database_password=$MASTER_DB_PASSWORD"
+
+      - name: Terraform Init ECR
+        run: terraform -chdir=terraform/ecr init
+
+      - name: Terraform Destroy ECR
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          ENVIRONMENT: ${{ env.ENVIRONMENT }}
+        run: |
+          terraform -chdir=terraform/ecr apply -destroy -auto-approve \
+            -var="region_default=$AWS_REGION" \
+            -var="main_tags={Terraform=\"true\", Environment=\"$ENVIRONMENT\"}"

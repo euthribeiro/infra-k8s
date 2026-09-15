@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: structurizr-lite
+  namespace: {{ .Values.namespace }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: structurizr-lite
+  template:
+    metadata:
+      labels:
+        app: structurizr-lite
+      annotations:
+        checksum/workspace: {{ .Files.Get "files/workspace.dsl" | sha256sum }}
+    spec:
+      initContainers:
+        - name: seed-workspace
+          image: busybox:1.36
+          command: ['sh', '-c', 'cp /config/workspace.dsl /data/workspace.dsl']
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: data
+              mountPath: /data
+      containers:
+        - name: structurizr-lite
+          image: {{ .Values.lite.image.repository }}:{{ .Values.lite.image.tag }}
+          imagePullPolicy: {{ .Values.lite.image.pullPolicy }}
+          args: ['local']
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: data
+              mountPath: /usr/local/structurizr
+          resources:
+            {{- toYaml .Values.lite.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 40
+            periodSeconds: 30
+      volumes:
+        - name: config
+          configMap:
+            name: structurizr-workspace
+        - name: data
+          emptyDir: {}

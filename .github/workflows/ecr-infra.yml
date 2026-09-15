@@ -1,0 +1,66 @@
+name: Criação do ECR (Elastic Container Registry)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+
+    outputs:
+      api_repository:
+        value: ${{ jobs.create-ecr.outputs.api_repository }}
+
+      chart_repository:
+        value: ${{ jobs.create-ecr.outputs.chart_repository }}
+
+      chart_repository_url:
+        value: ${{ jobs.create-ecr.outputs.chart_repository_url }}
+
+      structurizr_chart_repository:
+        value: ${{ jobs.create-ecr.outputs.structurizr_chart_repository }}
+
+      structurizr_chart_repository_url:
+        value: ${{ jobs.create-ecr.outputs.structurizr_chart_repository_url }}
+
+jobs:
+  create-ecr:
+    runs-on: ubuntu-latest
+
+    outputs:
+      api_repository: ${{ steps.tf.outputs.api_repository }}
+      chart_repository: ${{ steps.tf.outputs.chart_repository }}
+      chart_repository_url: ${{ steps.tf.outputs.chart_repository_url }}
+      structurizr_chart_repository: ${{ steps.tf.outputs.structurizr_chart_repository }}
+      structurizr_chart_repository_url: ${{ steps.tf.outputs.structurizr_chart_repository_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Terraform Init ECR
+        run: terraform -chdir=terraform/ecr init
+
+      - name: Terraform Apply
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          terraform -chdir=terraform/ecr apply -auto-approve \
+            -var="region_default=$AWS_REGION" \
+            -var="main_tags={Terraform=\"true\", Environment=\"$ENVIRONMENT\"}"
+
+      - name: Terraform ECR Outputs
+        id: tf
+        run: |
+          echo "api_repository=$(terraform -chdir=terraform/ecr output -raw api_repository_url)" >> $GITHUB_OUTPUT
+          echo "chart_repository=$(terraform -chdir=terraform/ecr output -raw chart_repository)" >> $GITHUB_OUTPUT
+          echo "chart_repository_url=$(terraform -chdir=terraform/ecr output -raw chart_repository_url)" >> $GITHUB_OUTPUT
+          echo "structurizr_chart_repository=$(terraform -chdir=terraform/ecr output -raw structurizr_chart_repository)" >> $GITHUB_OUTPUT
+          echo "structurizr_chart_repository_url=$(terraform -chdir=terraform/ecr output -raw structurizr_chart_repository_url)" >> $GITHUB_OUTPUT
