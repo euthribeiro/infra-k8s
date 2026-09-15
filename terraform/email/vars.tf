@@ -71,10 +71,10 @@ variable "create_irsa_role" {
   default     = true
 }
 
-variable "k8s_namespace" {
-  description = "Namespace do pod da aplicacao (deve casar com o chart Helm)."
-  type        = string
-  default     = "production"
+variable "k8s_namespaces" {
+  description = "Namespaces cujas ServiceAccounts da aplicacao podem assumir a role IRSA de envio de e-mail."
+  type        = list(string)
+  default     = ["production", "homologacao"]
 }
 
 variable "k8s_service_account" {

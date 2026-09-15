@@ -70,14 +70,10 @@ variable "root_domain" {
   default     = "bgt3.com.br"
 }
 
-# Hostnames cobertos pelo certificado ACM (HTTPS). O AWS Load Balancer
-# Controller descobre o certificado pelo HOSTNAME do listener do Gateway, entao
-# o(s) nome(s) aqui devem bater com os hostnames usados no Gateway/HTTPRoute do
-# Helm. Ex.: ["api.bgt3.com.br"] ou um curinga ["*.bgt3.com.br"].
 variable "acm_domains" {
-  description = "Dominios/SANs cobertos pelo certificado ACM da aplicacao (HTTPS)."
+  description = "Hostnames cobertos pelo certificado ACM do listener HTTPS do Gateway de plataforma; o primeiro e o dominio principal e os demais viram SANs. Tambem definem os CNAMEs criados pelo stack dns."
   type        = list(string)
-  default     = ["api.bgt3.com.br"]
+  default     = ["api.bgt3.com.br", "hml-api.bgt3.com.br"]
 
   validation {
     condition     = length(var.acm_domains) > 0

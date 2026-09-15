@@ -9,10 +9,10 @@ on:
   workflow_dispatch:
     inputs:
       etapa:
-        description: 'completo aplica tudo; sem-dns aplica tudo exceto o CNAME da API; somente-dns aplica apenas o CNAME da API'
+        description: 'completo aplica todos os stacks; somente-dns reaplica apenas os CNAMEs da aplicação'
         type: choice
         default: completo
-        options: ['completo', 'sem-dns', 'somente-dns']
+        options: ['completo', 'somente-dns']
 
 jobs:
   main-infra:
@@ -36,6 +36,15 @@ jobs:
     with:
       environment: 'production'
 
+  gateway:
+    needs: main-infra
+    uses: ./.github/workflows/gateway.yml
+    secrets: inherit
+    with:
+      environment: 'production'
+      cluster_name: ${{ needs.main-infra.outputs.cluster_name }}
+      acm_certificate_arn: ${{ needs.main-infra.outputs.acm_certificate_arn }}
+
   structurizr:
     needs: [main-infra, ecr-infra]
     uses: ./.github/workflows/structurizr.yml
@@ -47,8 +56,8 @@ jobs:
       structurizr_chart_repository_url: ${{ needs.ecr-infra.outputs.structurizr_chart_repository_url }}
 
   dns:
-    needs: main-infra
-    if: ${{ !cancelled() && inputs.etapa != 'sem-dns' && needs.main-infra.result != 'failure' }}
+    needs: [main-infra, gateway]
+    if: ${{ !cancelled() && needs.main-infra.result != 'failure' && needs.gateway.result != 'failure' }}
     uses: ./.github/workflows/dns.yml
     secrets: inherit
 

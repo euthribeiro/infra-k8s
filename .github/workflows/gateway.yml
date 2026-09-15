@@ -1,0 +1,61 @@
+name: Gateway de Plataforma
+
+env:
+  MANIFESTOS: ./kubernetes/gateway
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Ambiente de execução'
+        required: true
+        type: string
+
+      cluster_name:
+        description: 'Nome do cluster EKS.'
+        required: true
+        type: string
+
+      acm_certificate_arn:
+        description: 'ARN do certificado ACM do listener HTTPS.'
+        required: true
+        type: string
+
+jobs:
+  gateway:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Set up Kubeconfig for EKS
+        env:
+          CLUSTER_NAME: ${{ inputs.cluster_name }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: aws eks update-kubeconfig --region "$AWS_REGION" --name "$CLUSTER_NAME"
+
+      - name: Aplicar Gateway
+        env:
+          ACM_CERTIFICATE_ARN: ${{ inputs.acm_certificate_arn }}
+        run: |
+          if [ -z "$ACM_CERTIFICATE_ARN" ]; then
+            echo "::error::ARN do certificado ACM não informado."
+            exit 1
+          fi
+          kubectl apply -f "$MANIFESTOS/namespace.yaml"
+          sed "s|__ACM_CERTIFICATE_ARN__|$ACM_CERTIFICATE_ARN|" "$MANIFESTOS/loadbalancerconfiguration.yaml" | kubectl apply -f -
+          kubectl apply -f "$MANIFESTOS/gateway.yaml"
+
+      - name: Aguardar ALB
+        run: |
+          kubectl -n gateway wait --for=condition=Programmed gateway/bgt3-gw --timeout=10m
+          kubectl -n gateway get gateway bgt3-gw

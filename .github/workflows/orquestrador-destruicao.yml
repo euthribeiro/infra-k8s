@@ -1,0 +1,98 @@
+name: Orquestrador de Destruição
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmacao:
+        description: 'Digite DESTRUIR para remover Lambdas, aplicação, banco e infraestrutura'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: orquestrador-ambiente
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ secrets.ORQUESTRADOR_TOKEN }}
+  OWNER: ${{ github.repository_owner }}
+  DISPARAR: .github/scripts/disparar-workflow.sh
+
+jobs:
+  validar:
+    name: Validar confirmação e acesso
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verificar confirmação, token e repositórios
+        env:
+          CONFIRMACAO: ${{ inputs.confirmacao }}
+        run: |
+          if [ "$CONFIRMACAO" != "DESTRUIR" ]; then
+            echo "::error::Confirmação inválida. Digite DESTRUIR para prosseguir."
+            exit 1
+          fi
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Cadastre o secret ORQUESTRADOR_TOKEN no infra-k8s."
+            exit 1
+          fi
+          for repositorio in infra-k8s infra-db app-k8s lambda-auth; do
+            gh api "repos/$OWNER/$repositorio/actions/workflows" --jq '.total_count' > /dev/null
+            echo "ok: $OWNER/$repositorio"
+          done
+          echo "### Destruição do ambiente" >> "$GITHUB_STEP_SUMMARY"
+
+  lambda-auth:
+    name: 1. Lambda e API Gateway
+    needs: validar
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ['develop', 'master']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Disparar e aguardar
+        run: bash "$DISPARAR" "$OWNER/lambda-auth" destroy.yml "${{ matrix.branch }}" -f confirmacao=DESTRUIR
+
+  app-k8s:
+    name: 2. Aplicação
+    needs: [validar, lambda-auth]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ['develop', 'master']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Disparar e aguardar
+        run: bash "$DISPARAR" "$OWNER/app-k8s" destroy.yml "${{ matrix.branch }}" -f confirmacao=DESTRUIR
+
+  infra-db:
+    name: 3. Banco de dados
+    needs: [validar, app-k8s]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Desligar grants da Lambda
+        run: |
+          for variavel in LAMBDA_AUTH_GRANTS_PRODUCTION LAMBDA_AUTH_GRANTS_HOMOLOGACAO; do
+            gh variable set "$variavel" --body false --repo "$OWNER/infra-db"
+            echo "$variavel=false"
+          done
+      - name: Disparar e aguardar
+        run: bash "$DISPARAR" "$OWNER/infra-db" destroy.yml master -f confirmacao=DESTRUIR
+
+  infra-k8s:
+    name: 4. Infraestrutura Kubernetes
+    needs: [validar, infra-db]
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - name: Disparar e aguardar
+        run: bash "$DISPARAR" "$OWNER/infra-k8s" destroy.yml master -f confirmacao=DESTRUIR
