@@ -44,6 +44,20 @@ jobs:
               -var="newrelic_api_key=$NEW_RELIC_API_KEY" \
               -var="newrelic_account_id=$NEW_RELIC_ACCOUNT_ID" \
               -var="alert_email=$NEW_RELIC_ALERT_EMAIL"
+          elif [ "$STACK" = "dns" ]; then
+            SAIDA=$(mktemp)
+            set +e
+            terraform -chdir="terraform/$STACK" plan -input=false -no-color 2>&1 | tee "$SAIDA"
+            STATUS=${PIPESTATUS[0]}
+            set -e
+            if [ "$STATUS" -ne 0 ]; then
+              if grep -q "Search returned 0 results" "$SAIDA" && grep -q "data.aws_lb.gateway" "$SAIDA"; then
+                echo "::notice::Plan do stack dns/ ignorado: o ALB do Gateway não existe."
+                echo "- Plan do \`dns/\` ignorado: o ALB do Gateway não existe." >> "$GITHUB_STEP_SUMMARY"
+              else
+                exit "$STATUS"
+              fi
+            fi
           else
             terraform -chdir="terraform/$STACK" plan -input=false
           fi
