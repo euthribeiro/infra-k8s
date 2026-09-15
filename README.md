@@ -253,6 +253,14 @@ Restrições:
   ainda não existem.
 * A Lambda e a aplicação saem antes do banco e da plataforma: as rotas deixam de existir antes do
   ALB, e nenhum recurso do cluster fica preso a uma VPC em remoção.
+* O `destroy.yml` deste repositório recusa rodar enquanto existirem os namespaces `production` ou
+  `homologacao` no cluster, porque rotas e volumes da aplicação precisam sair antes do cluster.
+* Os CNAMEs saem antes do Gateway, porque o stack `dns/` localiza o ALB pelas tags do cluster.
+  Depois o Gateway é apagado e o workflow espera o Load Balancer Controller remover o ALB; só então
+  são destruídos Structurizr, SES, ECR e o stack `infra/`. A observabilidade é destruída em paralelo.
+* Stacks sem recursos no state são ignorados, então o workflow pode ser reexecutado depois de uma
+  falha parcial. Se o destroy do `dns/` falhar, os registros saem do state e ficam listados no
+  resumo da execução para remoção manual no Cloudflare.
 * Não são removidos: os workspaces e as variáveis do HCP Terraform, os repositórios, secrets e
   variables do GitHub, os environments e a conta New Relic. Um novo provisionamento reutiliza todos.
 

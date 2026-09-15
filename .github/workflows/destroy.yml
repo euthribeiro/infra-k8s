@@ -1,13 +1,44 @@
-name: Desligar infraestrutura
+name: Destruir Infraestrutura Kubernetes
 
 on:
   workflow_dispatch:
+    inputs:
+      confirmacao:
+        description: 'Digite DESTRUIR para remover DNS, Gateway, observabilidade, SES, Structurizr, ECR e o cluster EKS'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: infra-k8s-destroy
+  cancel-in-progress: false
+
+env:
+  DESTRUIR_STACK: .github/scripts/destruir-stack.sh
 
 jobs:
-  destroy:
+  validar:
     runs-on: ubuntu-latest
-    env:
-      ENVIRONMENT: production
+    steps:
+      - name: Conferir confirmação
+        env:
+          CONFIRMACAO: ${{ inputs.confirmacao }}
+        run: |
+          if [ "$CONFIRMACAO" != "DESTRUIR" ]; then
+            echo "::error::Confirmação inválida. Digite DESTRUIR para prosseguir."
+            exit 1
+          fi
+          echo "### Destruição da infraestrutura Kubernetes" >> "$GITHUB_STEP_SUMMARY"
+
+  cluster:
+    name: DNS e recursos no cluster
+    needs: validar
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 45
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -15,47 +46,187 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v4
         with:
+          terraform_wrapper: false
           cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
 
-      - name: Terraform Init DNS
-        run: terraform -chdir=terraform/dns init
-
-      - name: Terraform Destroy DNS
-        run: terraform -chdir=terraform/dns apply -destroy -auto-approve
-
-      - name: Terraform Init SES
-        run: terraform -chdir=terraform/email init
-
-      - name: Terraform Destroy SES
-        run: |
-          terraform -chdir=terraform/email apply -destroy -auto-approve
-
-      - name: Terraform Destroy SES
-        run: |
-          terraform -chdir=terraform/email apply -destroy -auto-approve
-
-      - name: Terraform Init Infra
-        run: terraform -chdir=terraform/infra init
-
-      - name: Terraform Destroy Infra
+      - name: Ler nome do cluster
         id: infra
-        env:
-          MASTER_DB_USERNAME: ${{ secrets.rds_master_username }}
-          MASTER_DB_PASSWORD: ${{ secrets.rds_master_password }}
         run: |
-          terraform -chdir=terraform/infra apply -destroy -auto-approve \
-          --var='acm_domains=["api.bgt3.com.br"]' \
-          --var="rds_database_username=$MASTER_DB_USERNAME" \
-          --var="rds_database_password=$MASTER_DB_PASSWORD"
+          terraform -chdir=terraform/infra init -input=false
+          if CLUSTER_NAME=$(terraform -chdir=terraform/infra output -raw cluster_name 2> /dev/null) && [ -n "$CLUSTER_NAME" ]; then
+            echo "cluster_name=$CLUSTER_NAME" >> "$GITHUB_OUTPUT"
+            echo "existe=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "existe=false" >> "$GITHUB_OUTPUT"
+            echo "- Stack \`infra/\` sem output \`cluster_name\`: nada a remover no cluster." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
-      - name: Terraform Init ECR
-        run: terraform -chdir=terraform/ecr init
+      - name: Configurar credenciais AWS
+        if: steps.infra.outputs.existe == 'true'
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Terraform Destroy ECR
+      - name: Verificar cluster
+        id: cluster
+        if: steps.infra.outputs.existe == 'true'
+        env:
+          CLUSTER_NAME: ${{ steps.infra.outputs.cluster_name }}
+          REGION: ${{ vars.AWS_REGION }}
+        run: |
+          if aws eks describe-cluster --name "$CLUSTER_NAME" > /dev/null 2>&1; then
+            aws eks update-kubeconfig --region "$REGION" --name "$CLUSTER_NAME"
+            echo "existe=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "existe=false" >> "$GITHUB_OUTPUT"
+            echo "- Cluster \`$CLUSTER_NAME\` não existe: nada a remover no cluster." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Conferir ambientes da aplicação
+        if: steps.cluster.outputs.existe == 'true'
+        run: |
+          RESTANTES=$(kubectl get namespace production homologacao --ignore-not-found -o name | tr '\n' ' ')
+          if [ -n "$RESTANTES" ]; then
+            echo "::error::Ambientes da aplicação ainda existem no cluster ($RESTANTES). Dispare antes o destroy.yml do app-k8s em develop e master."
+            exit 1
+          fi
+
+      - name: Destruir DNS
+        env:
+          REMOVER_DO_STATE_SE_FALHAR: 'true'
+        run: bash "$DESTRUIR_STACK" dns
+
+      - name: Set up Helm CLI
+        if: steps.cluster.outputs.existe == 'true'
+        uses: azure/setup-helm@v5
+
+      - name: Remover Structurizr e agente New Relic
+        if: steps.cluster.outputs.existe == 'true'
+        run: |
+          for alvo in structurizr/structurizr newrelic/newrelic-bundle; do
+            NAMESPACE="${alvo%%/*}"
+            RELEASE="${alvo##*/}"
+            if helm status "$RELEASE" -n "$NAMESPACE" > /dev/null 2>&1; then
+              helm uninstall "$RELEASE" -n "$NAMESPACE" --wait --timeout 10m
+              echo "- Release \`$RELEASE\` removido do namespace \`$NAMESPACE\`." >> "$GITHUB_STEP_SUMMARY"
+            fi
+            kubectl delete namespace "$NAMESPACE" --ignore-not-found --wait --timeout=10m
+          done
+
+      - name: Remover Gateway e aguardar o ALB
+        if: steps.cluster.outputs.existe == 'true'
+        run: |
+          if kubectl get crd gateways.gateway.networking.k8s.io > /dev/null 2>&1; then
+            kubectl delete gateway bgt3-gw -n gateway --ignore-not-found --wait --timeout=10m
+          fi
+          kubectl delete namespace gateway --ignore-not-found --wait --timeout=10m
+          echo "- Gateway \`gateway/bgt3-gw\` e ALB removidos." >> "$GITHUB_STEP_SUMMARY"
+
+  observability:
+    name: Observabilidade New Relic
+    needs: validar
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Destruir observabilidade
+        env:
+          NEW_RELIC_API_KEY: ${{ secrets.NEW_RELIC_API_KEY }}
+          NEW_RELIC_ACCOUNT_ID: ${{ secrets.NEW_RELIC_ACCOUNT_ID }}
+          NEW_RELIC_ALERT_EMAIL: ${{ vars.NEW_RELIC_ALERT_EMAIL }}
+        run: |
+          bash "$DESTRUIR_STACK" observability \
+            -var="newrelic_api_key=$NEW_RELIC_API_KEY" \
+            -var="newrelic_account_id=$NEW_RELIC_ACCOUNT_ID" \
+            -var="alert_email=$NEW_RELIC_ALERT_EMAIL"
+
+  structurizr:
+    name: Túnel do Structurizr
+    needs: cluster
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Destruir Structurizr
+        run: bash "$DESTRUIR_STACK" structurizr
+
+  email:
+    name: SES
+    needs: cluster
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Destruir SES
+        run: bash "$DESTRUIR_STACK" email
+
+  ecr:
+    name: ECR
+    needs: cluster
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Destruir ECR
         env:
           AWS_REGION: ${{ vars.AWS_REGION }}
-          ENVIRONMENT: ${{ env.ENVIRONMENT }}
+          ENVIRONMENT: production
         run: |
-          terraform -chdir=terraform/ecr apply -destroy -auto-approve \
+          bash "$DESTRUIR_STACK" ecr \
             -var="region_default=$AWS_REGION" \
             -var="main_tags={Terraform=\"true\", Environment=\"$ENVIRONMENT\"}"
+
+  infra:
+    name: Cluster EKS e rede
+    needs: [cluster, structurizr, email]
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Destruir infraestrutura principal
+        run: bash "$DESTRUIR_STACK" infra
