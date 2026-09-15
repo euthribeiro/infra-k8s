@@ -5,7 +5,7 @@ rede, cluster EKS, certificado TLS, Gateway de entrada, registro de imagens, DNS
 transacional, o servidor de documentação de arquitetura e a observabilidade no New Relic (agente do
 cluster, dashboards, alertas e healthcheck externo).
 
-FIAP · Pós-Tech · 13SOAT · Tech Challenge Fase 3 · Grupo **BGT³**
+FIAP · Pós-Tech · 15SOAT · Tech Challenge Fase 3 · Grupo **BGT³**
 
 ## Propósito
 
