@@ -279,6 +279,41 @@ depois do `infra/`, com os values de [`newrelic-k8s/`](../newrelic-k8s/README.md
 
 ---
 
+## 7. Stack `dynamodb-execucao/` — tabelas do execucao-service
+
+Workspace HCP: **`wrench_auto_repair_execucao_dynamodb`**. Cria as três tabelas DynamoDB (on-demand)
+que o `execucao-service` usa. A aplicação **não** cria tabelas na AWS (`Dynamo__CriarTabelas` é só
+para o DynamoDB Local): elas precisam existir antes do deploy.
+
+### Recursos criados
+
+| Recurso | Chave | Índice | Uso |
+| ------- | ----- | ------ | --- |
+| `aws_dynamodb_table.execucao` | `ordemServicoId` (S) | `status-enfileiradaEm` (`status`, `enfileiradaEm`) | Fila de execuções |
+| `aws_dynamodb_table.execucao_outbox` | `id` (S) | `status-criadoEm` (`status`, `criadoEm`) | Outbox transacional: eventos de saída pendentes de publicação no SNS |
+| `aws_dynamodb_table.execucao_idempotencia` | `messageId` (S) | — | Mensagens já consumidas; expira pelo TTL no atributo `ttl` |
+
+### Variáveis
+
+| Variável | Obrigatória | Default | Variável da aplicação |
+| -------- | ----------- | ------- | --------------------- |
+| `execucao_tabela` | não | `wrench-execucao` | `Dynamo__Execucao` |
+| `execucao_outbox_tabela` | não | `wrench-execucao-outbox` | `Dynamo__Outbox` |
+| `execucao_idempotencia_tabela` | não | `wrench-execucao-idempotencia` | `Dynamo__Idempotencia` |
+
+Os nomes podem mudar, desde que a aplicação receba os mesmos valores. Output: `execucao_tabelas`
+(nomes) e `execucao_tabelas_arns` (para a policy da role IRSA: `dynamodb:GetItem`, `PutItem`,
+`UpdateItem`, `Query` e `TransactWriteItems` nas tabelas e em `<arn>/index/*`).
+
+### Como aplicar
+
+```bash
+terraform -chdir=terraform/dynamodb-execucao init
+terraform -chdir=terraform/dynamodb-execucao apply
+```
+
+---
+
 ## Ordem de aplicação (visão geral)
 
 Ponta a ponta, atravessando os quatro repositórios:
@@ -288,6 +323,7 @@ Ponta a ponta, atravessando os quatro repositórios:
 2. infra-k8s  kubernetes/gateway      # Gateway de plataforma -> ALB único
 3. infra-k8s  terraform/dns           # CNAMEs api e hml-api -> ALB
 4. infra-k8s  terraform/ecr, email    # paralelizáveis após a infra
+   infra-k8s  terraform/dynamodb-execucao # tabelas do execucao-service; independe da infra
    infra-k8s  Helm (nri-bundle)       # agente New Relic no cluster
    infra-k8s  terraform/observability # dashboard, alertas e synthetic; independe da AWS
 5. infra-db   terraform/rds           # instância RDS
