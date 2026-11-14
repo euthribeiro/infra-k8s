@@ -1,0 +1,213 @@
+name: CI reutilizável .NET (build, testes, cobertura e SonarCloud)
+
+on:
+  workflow_call:
+    inputs:
+      solution:
+        description: 'Caminho da solution ou do projeto a compilar'
+        required: true
+        type: string
+
+      dotnet_version:
+        description: 'Versão do SDK .NET'
+        required: false
+        type: string
+        default: '10.0.x'
+
+      cobertura_minima:
+        description: 'Percentual mínimo de cobertura de linhas; abaixo disso o job falha'
+        required: false
+        type: number
+        default: 80
+
+      cobertura_assembly_filtros:
+        description: 'Filtros de assembly do ReportGenerator, separados por ponto e vírgula'
+        required: false
+        type: string
+        default: '+*;-*.tests;-*Tests'
+
+      cobertura_classe_filtros:
+        description: 'Filtros de classe do ReportGenerator, separados por ponto e vírgula'
+        required: false
+        type: string
+        default: '-*.Migrations.*;-*.Program;-Program'
+
+      sonar_project_key:
+        description: 'Project key no SonarCloud; vazio desativa a análise'
+        required: false
+        type: string
+        default: ''
+
+      sonar_organization:
+        description: 'Organização no SonarCloud'
+        required: false
+        type: string
+        default: ''
+
+      sonar_exclusions:
+        description: 'Arquivos fora da análise do Sonar'
+        required: false
+        type: string
+        default: '**/Migrations/**,**/obj/**,**/bin/**'
+
+      helm_chart:
+        description: 'Diretório do chart Helm a validar; vazio pula a validação'
+        required: false
+        type: string
+        default: ''
+
+      helm_lint_args:
+        description: 'Argumentos extras do helm lint (valores obrigatórios do chart)'
+        required: false
+        type: string
+        default: ''
+
+      auditar_dependencias:
+        description: 'Falha o job quando houver pacote com vulnerabilidade conhecida'
+        required: false
+        type: boolean
+        default: true
+
+    secrets:
+      SONAR_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-sonar:
+    runs-on: ubuntu-latest
+
+    env:
+      SOLUTION: ${{ inputs.solution }}
+      COBERTURA_MINIMA: ${{ inputs.cobertura_minima }}
+      SONAR_PROJECT_KEY: ${{ inputs.sonar_project_key }}
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ inputs.dotnet_version }}
+
+      - name: Configurar JDK para o scanner do Sonar
+        if: inputs.sonar_project_key != ''
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Cache dos pacotes NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/packages.lock.json') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Restaurar dependências
+        run: dotnet restore "$SOLUTION"
+
+      - name: Auditar dependências vulneráveis
+        if: inputs.auditar_dependencias
+        run: |
+          RELATORIO=$(dotnet list "$SOLUTION" package --vulnerable --include-transitive)
+          echo "$RELATORIO"
+          if echo "$RELATORIO" | grep -qE '^\s+>'; then
+            echo "::error::Dependências com vulnerabilidade conhecida encontradas."
+            exit 1
+          fi
+
+      - name: Instalar ferramentas de análise
+        run: |
+          dotnet tool install --global dotnet-reportgenerator-globaltool
+          if [ -n "$SONAR_PROJECT_KEY" ]; then
+            dotnet tool install --global dotnet-sonarscanner
+          fi
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Iniciar análise do SonarCloud
+        if: inputs.sonar_project_key != '' && env.SONAR_TOKEN != ''
+        env:
+          SONAR_ORGANIZATION: ${{ inputs.sonar_organization }}
+          SONAR_EXCLUSIONS: ${{ inputs.sonar_exclusions }}
+        run: |
+          dotnet sonarscanner begin \
+            /k:"$SONAR_PROJECT_KEY" \
+            /o:"$SONAR_ORGANIZATION" \
+            /d:sonar.token="$SONAR_TOKEN" \
+            /d:sonar.host.url="https://sonarcloud.io" \
+            /d:sonar.cs.opencover.reportsPaths="**/coverage.opencover.xml" \
+            /d:sonar.exclusions="$SONAR_EXCLUSIONS" \
+            /d:sonar.coverage.exclusions="$SONAR_EXCLUSIONS" \
+            /d:sonar.qualitygate.wait=true
+
+      - name: Build
+        run: dotnet build "$SOLUTION" --configuration Release --no-restore
+
+      - name: Testes com cobertura
+        env:
+          ASPNETCORE_ENVIRONMENT: 'Development'
+        run: |
+          dotnet test "$SOLUTION" --configuration Release --no-build --verbosity normal \
+            --collect:"XPlat Code Coverage;Format=opencover,cobertura" \
+            --results-directory ./testresults
+
+      - name: Encerrar análise do SonarCloud e aguardar o quality gate
+        if: inputs.sonar_project_key != '' && env.SONAR_TOKEN != ''
+        run: dotnet sonarscanner end /d:sonar.token="$SONAR_TOKEN"
+
+      - name: Relatório de cobertura
+        env:
+          FILTROS_ASSEMBLY: ${{ inputs.cobertura_assembly_filtros }}
+          FILTROS_CLASSE: ${{ inputs.cobertura_classe_filtros }}
+        run: |
+          reportgenerator \
+            "-reports:./testresults/**/coverage.cobertura.xml" \
+            "-targetdir:./coverage-report" \
+            "-reporttypes:TextSummary;Html;MarkdownSummaryGithub" \
+            "-assemblyfilters:$FILTROS_ASSEMBLY" \
+            "-classfilters:$FILTROS_CLASSE"
+          cat ./coverage-report/Summary.txt
+          cat ./coverage-report/SummaryGithub.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Conferir cobertura mínima
+        run: |
+          COBERTURA=$(grep -oP 'Line coverage:\s*\K[0-9.]+' ./coverage-report/Summary.txt)
+          if [ -z "$COBERTURA" ]; then
+            echo "::error::Não foi possível ler a cobertura de linhas do relatório."
+            exit 1
+          fi
+          awk -v atual="$COBERTURA" -v minimo="$COBERTURA_MINIMA" 'BEGIN {
+            if (atual + 0 < minimo + 0) {
+              printf "::error::Cobertura de %s%% abaixo do mínimo de %s%%.\n", atual, minimo
+              exit 1
+            }
+            printf "Cobertura de %s%% (mínimo %s%%).\n", atual, minimo
+          }'
+
+      - name: Publicar relatório de cobertura
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cobertura-${{ github.job }}
+          path: ./coverage-report
+          if-no-files-found: ignore
+
+      - name: Instalar Helm
+        if: inputs.helm_chart != ''
+        uses: azure/setup-helm@v5
+
+      - name: Validar chart Helm
+        if: inputs.helm_chart != ''
+        env:
+          CHART: ${{ inputs.helm_chart }}
+          ARGS: ${{ inputs.helm_lint_args }}
+        run: |
+          helm lint "$CHART" $ARGS
+          helm template ci "$CHART" $ARGS > /dev/null

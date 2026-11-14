@@ -4,7 +4,7 @@ Infraestrutura Kubernetes do **Tech Challenge — Fase 3** (aplicação _Wrench 
 AWS, provisionada com Terraform e estado remoto no **HCP Terraform (Terraform Cloud)**,
 organização `bgt3`.
 
-A infraestrutura está dividida em **seis _root modules_ independentes**, cada um com o seu
+A infraestrutura está dividida em **oito _root modules_ independentes**, cada um com o seu
 próprio _state_ (workspace HCP). A separação existe para isolar ciclos de vida diferentes (uma
 stack pode ser aplicada/destruída sem tocar nas outras) e para resolver dependências de ordem —
 por exemplo, o CNAME da aplicação só pode ser criado depois que o Load Balancer da aplicação
@@ -23,8 +23,12 @@ terraform/
 │                 # workspace HCP: wrench_auto_repair_dns
 ├── structurizr/  # Cloudflare Tunnel que expõe o Structurizr Lite
 │                 # workspace HCP: wrench_auto_repair_structurizr
-└── observability/ # New Relic: dashboard, alertas, notificação e synthetic monitor
-                   # workspace HCP: wrench_auto_repair_observability
+├── observability/ # New Relic: dashboard, alertas, notificação e synthetic monitor
+│                 # workspace HCP: wrench_auto_repair_observability
+├── dynamodb-execucao/ # Tabelas DynamoDB do execucao-service
+│                 # workspace HCP: wrench_auto_repair_execucao_dynamodb
+└── mensageria/   # SNS, SQS com DLQ e roles IRSA dos três microsserviços
+                  # workspace HCP: wrench_auto_repair_mensageria
 ```
 
 > **O banco de dados não está aqui.** A instância RDS, o DB subnet group, o security group do
@@ -314,6 +318,95 @@ terraform -chdir=terraform/dynamodb-execucao apply
 
 ---
 
+## 8. Stack `mensageria/` — SNS, SQS com DLQ e IRSA da Saga
+
+Workspace HCP: **`wrench_auto_repair_mensageria`**. É o transporte da Saga da Fase 4: os três
+microsserviços só conversam por aqui. Lê o OIDC provider do stack `infra/` por
+`terraform_remote_state` para montar as roles IRSA.
+
+### Topologia
+
+**Um tópico por publicador** (ninguém publica no tópico de outro) e **uma fila com DLQ por
+consumidor** (ninguém lê a fila de outro):
+
+```
+                    ┌──────────────────────┐
+  OS Service  ─────▶│ SNS wrench-os-events │
+ (orquestrador)     └──────────┬───────────┘
+                               │  filter policy no atributo "tipo"
+            ┌──────────────────┴──────────────────┐
+            ▼                                     ▼
+  SQS wrench-billing-commands           SQS wrench-execucao-commands
+  GerarOrcamento, CancelarOrcamento,    IniciarExecucao, CancelarExecucao
+  EstornarPagamento                                │
+            │                                      │
+            ▼                                      ▼
+      Billing Service                        Execução Service
+            │                                      │
+            ▼                                      ▼
+  SNS wrench-billing-events             SNS wrench-execucao-events
+            └──────────────────┬───────────────────┘
+                               ▼
+                      SQS wrench-os-saga  ─────▶  OS Service (Saga)
+```
+
+Cada fila tem a sua `*-dlq`; depois de `max_receive_count` entregas sem sucesso a mensagem é
+movida para lá e o alerta **DLQ da Saga com mensagens** (stack `observability/`) dispara.
+
+### Recursos criados
+
+| Recurso | Nome | Para quê |
+| ------- | ---- | -------- |
+| `aws_sns_topic.eventos["os"]` | `wrench-os-events` | Comandos da Saga emitidos pelo OS Service |
+| `aws_sns_topic.eventos["billing"]` | `wrench-billing-events` | Eventos de orçamento, pagamento e estorno |
+| `aws_sns_topic.eventos["execucao"]` | `wrench-execucao-events` | `ExecucaoConcluida` e `ExecucaoFalhou` |
+| `aws_sqs_queue.fila` + `aws_sqs_queue.dlq` | `wrench-billing-commands`, `wrench-execucao-commands`, `wrench-os-saga` (+ `-dlq`) | Fila de entrada de cada consumidor |
+| `aws_sqs_queue_policy.fila` | — | Só os tópicos deste stack podem entregar nas filas |
+| `aws_sns_topic_subscription.fila` | — | Assinatura com `raw_message_delivery` e filtro por `tipo` |
+| `aws_iam_role.servico` | `wrench-os-mensageria`, `wrench-billing-mensageria`, `wrench-execucao-mensageria` | Role IRSA de cada serviço |
+| `aws_iam_role_policy.mensageria` | — | `sns:Publish` no próprio tópico; `sqs:ReceiveMessage`/`DeleteMessage`/`ChangeMessageVisibility`/`GetQueue*` na própria fila |
+| `aws_iam_role_policy.dynamodb_execucao` | — | Tabelas `wrench-execucao*` e seus índices, incluindo `TransactWriteItems` |
+| `aws_iam_role_policy.ses_send` | — | `ses:SendEmail` na role do OS Service (a ServiceAccount é a mesma que enviava e-mail pela role do stack `email/`) |
+
+`raw_message_delivery = true` faz o corpo da mensagem SQS ser o próprio JSON do evento; os
+metadados (`messageId`, `tipo`, `correlationId`, `traceparent`) chegam como _message attributes_.
+O `traceparent` mantém o trace distribuído ligado de ponta a ponta no New Relic.
+
+### Variáveis
+
+| Variável | Default | Para quê |
+| -------- | ------- | -------- |
+| `prefixo` | `wrench` | Prefixo de tópicos, filas e roles |
+| `k8s_namespaces` | `["production", "homologacao"]` | Namespaces cujas ServiceAccounts podem assumir as roles |
+| `max_receive_count` | `5` | Entregas antes de a mensagem ir para a DLQ |
+| `visibility_timeout_seconds` | `60` | Invisibilidade da mensagem em processamento |
+| `message_retention_seconds` | `345600` | Retenção da fila principal (4 dias) |
+| `dlq_message_retention_seconds` | `1209600` | Retenção da DLQ (14 dias) |
+| `dynamodb_table_prefix` | `wrench-execucao` | Prefixo das tabelas liberadas na role do Execução |
+| `ses_send_allowed` | `true` | Acumula `ses:SendEmail` na role do OS Service |
+
+### Outputs e onde cada um é consumido
+
+| Output | Consumidor |
+| ------ | ---------- |
+| `os_topic_arn` / `topicos` | `Sns__TopicArn` de cada serviço |
+| `os_queue_url` / `filas` | `Sqs__QueueUrl` de cada serviço |
+| `os_role_arn` / `roles_irsa` | `serviceAccount.roleArn` de cada chart Helm |
+| `dlqs` | Nomes usados nas condições de alerta do New Relic |
+
+> **Uma ServiceAccount, uma role.** A anotação `eks.amazonaws.com/role-arn` aceita um único ARN,
+> então a role do OS Service concentra SNS, SQS e SES. O deploy do `app-k8s` passa
+> `os_role_arn` em `serviceAccount.roleArn`, substituindo a role do stack `email/`.
+
+### Como aplicar
+
+```bash
+terraform -chdir=terraform/mensageria init
+terraform -chdir=terraform/mensageria apply
+```
+
+---
+
 ## Ordem de aplicação (visão geral)
 
 Ponta a ponta, atravessando os quatro repositórios:
@@ -324,6 +417,7 @@ Ponta a ponta, atravessando os quatro repositórios:
 3. infra-k8s  terraform/dns           # CNAMEs api e hml-api -> ALB
 4. infra-k8s  terraform/ecr, email    # paralelizáveis após a infra
    infra-k8s  terraform/dynamodb-execucao # tabelas do execucao-service; independe da infra
+   infra-k8s  terraform/mensageria   # SNS, SQS com DLQ e roles IRSA dos 3 serviços
    infra-k8s  Helm (nri-bundle)       # agente New Relic no cluster
    infra-k8s  terraform/observability # dashboard, alertas e synthetic; independe da AWS
 5. infra-db   terraform/rds           # instância RDS
@@ -343,7 +437,7 @@ percorre o caminho inverso. Ambos estão descritos no [README do repositório](.
 - Criar os workspaces listados acima, cada um com o _working directory_ apontando para a
   respectiva pasta (`terraform/infra`, `terraform/ecr`, etc.).
 - Habilitar **state sharing** do workspace da infra (`wrench_auto_repair`) para os workspaces de
-  `email`, `dns`, `structurizr`, para o `wrench_auto_repair_rds` (repositório `infra-db`) e para o
+  `email`, `dns`, `structurizr`, `mensageria`, para o `wrench_auto_repair_rds` (repositório `infra-db`) e para o
   leitor de outputs do `app-k8s`. Todos consomem `terraform_remote_state`.
 - Definir as variáveis sensíveis (Cloudflare) como _Terraform Variables_ marcadas como
   _sensitive_ nos workspaces, nunca commitadas.
