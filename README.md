@@ -85,6 +85,8 @@ cluster não recrie recursos de outra natureza.
 | `terraform/email` | `wrench_auto_repair_email` | Identidade SES, DKIM e role IRSA usada pela aplicação nos dois namespaces |
 | `terraform/structurizr` | `wrench_auto_repair_structurizr` | Túnel Cloudflare do Structurizr |
 | `terraform/observability` | `wrench_auto_repair_observability` | Dashboard, política e condições de alerta, notificação por e-mail e synthetic monitor no New Relic |
+| `terraform/mensageria` | `wrench_auto_repair_mensageria` | Tópicos SNS, filas SQS com DLQ, assinaturas com filtro por `tipo` e role IRSA de cada microsserviço |
+| `terraform/dynamodb-execucao` | `wrench_auto_repair_execucao_dynamodb` | Tabelas DynamoDB do `execucao-service`: fila, outbox e idempotência |
 
 ### Outputs consumidos por outros repositórios
 
@@ -96,6 +98,9 @@ cluster não recrie recursos de outra natureza.
 | `oidc_provider_arn`, `oidc_provider_host` | stack `email/` | Trust policy da role IRSA |
 | `app_hostnames` | stack `dns/` | Criar os CNAMEs corretos |
 | `api_repository_url`, `chart_repository*` (stack `ecr`) | `app-k8s` | Destino do push da imagem e do chart |
+| `billing_*`, `execucao_*` (stack `ecr`) | `billing-service`, `execucao-service` | Destino do push da imagem e do chart de cada serviço |
+| `os_topic_arn`, `os_queue_url`, `os_role_arn` (stack `mensageria`) | `app-k8s` | `Sns__TopicArn`, `Sqs__QueueUrl` e `serviceAccount.roleArn` do OS Service |
+| `topicos`, `filas`, `roles_irsa` (stack `mensageria`) | `billing-service`, `execucao-service` | Tópico, fila e role IRSA de cada serviço |
 
 ## Gateway de plataforma
 
@@ -159,7 +164,7 @@ O detalhamento de variáveis por stack está em [`terraform/README.md`](./terraf
 | Gatilho | O que acontece |
 |---|---|
 | Pull request para `master` | `fmt -check`, `init`, `validate` e `plan` de cada stack, em matriz |
-| Push em `master` | `apply` de `infra`, `ecr`, `email`, `structurizr` e `observability`; Gateway de plataforma; `dns` depois do Gateway; `helm upgrade --install` do `nri-bundle` |
+| Push em `master` | `apply` de `infra`, `ecr`, `email`, `mensageria`, `dynamodb-execucao`, `structurizr` e `observability`; Gateway de plataforma; `dns` depois do Gateway; `helm upgrade --install` do `nri-bundle` |
 | `workflow_dispatch` com `etapa=completo` | Mesmo fluxo do push, sob demanda |
 | `workflow_dispatch` com `etapa=somente-dns` | Reaplica apenas os CNAMEs da aplicação |
 
@@ -183,6 +188,7 @@ O detalhamento de variáveis por stack está em [`terraform/README.md`](./terraf
 | `NEW_RELIC_ACCOUNT_ID` | secret | ID da conta New Relic |
 | `NEW_RELIC_ALERT_EMAIL` | variable | E-mail que recebe as notificações de alerta |
 | `ORQUESTRADOR_TOKEN` | secret | Fine-grained token usado pelos orquestradores para disparar e acompanhar os pipelines dos quatro repositórios |
+| `SONAR_TOKEN` | secret | Token do SonarCloud, usado pelo workflow reutilizável de CI dos microsserviços (cadastrado em cada repositório consumidor) |
 
 Credenciais AWS e variáveis específicas de stack são configuradas diretamente nos workspaces do
 HCP Terraform.
@@ -272,10 +278,52 @@ Restrições:
 | Dashboard `Wrench Auto Repair` | `terraform/observability/dashboard.tf` | Páginas Negócio, API, Integrações, Kubernetes e Healthcheck |
 | Política `Wrench Auto Repair` | `terraform/observability/alerts.tf` | Condições de falha no processamento de OS, erro 5xx, latência p95, restart de pod e healthcheck, com notificação por e-mail |
 | Synthetic monitor `Wrench API - healthcheck` | `terraform/observability/synthetics.tf` | `GET https://api.bgt3.com.br/health` a cada 5 minutos, de fora do cluster |
+| Página `Saga` e alertas da Saga | `terraform/observability/dashboard.tf` e `saga-alerts.tf` | Desfecho das Sagas, mensagens por tipo, compensações por etapa, outbox pendente e traces distribuídos; alertas de DLQ, falha no consumo, timeout, outbox represado e duração |
 
 Traces, métricas e logs da API são exportados pela própria aplicação via OTLP. As consultas NRQL de
 cada painel e o significado de cada métrica estão no repositório `app-k8s`, em
 `docs/observability/dashboards-nrql.md`, e a decisão da ferramenta no ADR 003.
+
+## CI reutilizável dos microsserviços
+
+O workflow [`dotnet-service-ci.yml`](./.github/workflows/dotnet-service-ci.yml) é **reutilizável**
+(`workflow_call`) e é o pipeline de qualidade dos três microsserviços da Fase 4. Ter um só lugar
+evita que cada repositório tenha a sua própria versão do gate de cobertura e da análise estática.
+
+```yaml
+jobs:
+  build-test:
+    uses: euthribeiro/infra-k8s/.github/workflows/dotnet-service-ci.yml@master
+    secrets: inherit
+    with:
+      solution: wrench.execucao.sln
+      cobertura_minima: 80
+      sonar_project_key: euthribeiro_execucao-service
+      sonar_organization: euthribeiro
+      helm_chart: chart
+```
+
+O que ele faz, em ordem: restaura, **falha se houver dependência com vulnerabilidade conhecida**,
+abre a análise do SonarCloud, compila, roda os testes coletando cobertura em `opencover` e
+`cobertura`, fecha a análise **aguardando o quality gate**, gera o relatório de cobertura no resumo
+do job e **falha abaixo do mínimo**, e por fim valida o chart Helm.
+
+| Input | Padrão | Para quê |
+|---|---|---|
+| `solution` | — | Solution ou projeto a compilar (obrigatório) |
+| `dotnet_version` | `10.0.x` | Versão do SDK |
+| `cobertura_minima` | `80` | Percentual de linhas abaixo do qual o job falha |
+| `cobertura_assembly_filtros` / `cobertura_classe_filtros` | ver workflow | Filtros do ReportGenerator |
+| `sonar_project_key` / `sonar_organization` | vazio | Vazio desliga a análise |
+| `sonar_exclusions` | `**/Migrations/**,**/obj/**,**/bin/**` | Fora da análise e da cobertura do Sonar |
+| `helm_chart` / `helm_lint_args` | vazio | Vazio pula `helm lint` e `helm template` |
+| `auditar_dependencias` | `true` | Falha quando há pacote vulnerável |
+
+Secret necessário em cada repositório consumidor: **`SONAR_TOKEN`**. Sem ele a análise é pulada e
+o restante do pipeline segue — o build nunca quebra por falta de credencial.
+
+Repositórios que consomem o workflow hoje: `app-k8s` (`dotnet-ci.yml`) e `execucao-service`
+(`ci.yml`).
 
 ## Manifestos e charts auxiliares
 
