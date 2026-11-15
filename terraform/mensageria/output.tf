@@ -37,3 +37,28 @@ output "os_role_arn" {
   description = "Role IRSA do OS Service (serviceAccount.roleArn do chart wrench-api)."
   value       = aws_iam_role.servico["os"].arn
 }
+
+output "billing_topic_arn" {
+  description = "Topico do Billing Service (Messaging__TopicoEventos do billing-service)."
+  value       = aws_sns_topic.eventos["billing"].arn
+}
+
+output "billing_role_arn" {
+  description = "Role IRSA do Billing Service (serviceAccount.roleArn do chart do billing)."
+  value       = aws_iam_role.servico["billing"].arn
+}
+
+output "execucao_topic_arn" {
+  description = "Topico do Execucao Service (Sns__TopicArn do execucao-service)."
+  value       = aws_sns_topic.eventos["execucao"].arn
+}
+
+output "execucao_queue_url" {
+  description = "Fila de comandos do Execucao Service (Sqs__QueueUrl do execucao-service)."
+  value       = aws_sqs_queue.fila["${var.prefixo}-execucao-commands"].url
+}
+
+output "execucao_role_arn" {
+  description = "Role IRSA do Execucao Service (serviceAccount.roleArn do chart do execucao)."
+  value       = aws_iam_role.servico["execucao"].arn
+}
