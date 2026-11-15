@@ -35,7 +35,7 @@ variable "tfc_organization" {
 variable "infra_workspace" {
   description = "Workspace do stack infra/, de onde vem o OIDC provider do cluster EKS."
   type        = string
-  default     = "wrench_auto_repair_infra"
+  default     = "wrench_auto_repair"
 }
 
 variable "prefixo" {
