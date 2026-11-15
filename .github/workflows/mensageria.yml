@@ -1,0 +1,56 @@
+name: Mensageria da Saga (SNS, SQS e IRSA)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+
+    outputs:
+      os_topic_arn:
+        value: ${{ jobs.mensageria.outputs.os_topic_arn }}
+
+      os_queue_url:
+        value: ${{ jobs.mensageria.outputs.os_queue_url }}
+
+      os_role_arn:
+        value: ${{ jobs.mensageria.outputs.os_role_arn }}
+
+jobs:
+  mensageria:
+    runs-on: ubuntu-latest
+
+    outputs:
+      os_topic_arn: ${{ steps.tf.outputs.os_topic_arn }}
+      os_queue_url: ${{ steps.tf.outputs.os_queue_url }}
+      os_role_arn: ${{ steps.tf.outputs.os_role_arn }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Terraform Init
+        run: terraform -chdir=terraform/mensageria init -input=false
+
+      - name: Terraform Apply
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          terraform -chdir=terraform/mensageria apply -auto-approve -input=false \
+            -var="region_default=$AWS_REGION" \
+            -var="main_tags={Terraform=\"true\", Environment=\"$ENVIRONMENT\"}"
+
+      - name: Terraform Outputs
+        id: tf
+        run: |
+          for saida in os_topic_arn os_queue_url os_role_arn; do
+            echo "$saida=$(terraform -chdir=terraform/mensageria output -raw "$saida")" >> "$GITHUB_OUTPUT"
+          done

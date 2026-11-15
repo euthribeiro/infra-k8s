@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       confirmacao:
-        description: 'Digite DESTRUIR para remover DNS, Gateway, observabilidade, SES, Structurizr, ECR e o cluster EKS'
+        description: 'Digite DESTRUIR para remover DNS, Gateway, observabilidade, SES, Structurizr, mensageria, DynamoDB, ECR e o cluster EKS'
         required: true
         type: string
 
@@ -211,9 +211,53 @@ jobs:
             -var="region_default=$AWS_REGION" \
             -var="main_tags={Terraform=\"true\", Environment=\"$ENVIRONMENT\"}"
 
+  mensageria:
+    name: Mensageria da Saga
+    needs: cluster
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Destruir mensageria
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          ENVIRONMENT: production
+        run: |
+          bash "$DESTRUIR_STACK" mensageria             -var="region_default=$AWS_REGION"             -var="main_tags={Terraform=\"true\", Environment=\"$ENVIRONMENT\"}"
+
+  dynamodb-execucao:
+    name: Tabelas DynamoDB
+    needs: cluster
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Destruir tabelas do Execução Service
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          ENVIRONMENT: production
+        run: |
+          bash "$DESTRUIR_STACK" dynamodb-execucao             -var="region_default=$AWS_REGION"             -var="main_tags={Terraform=\"true\", Environment=\"$ENVIRONMENT\"}"
+
   infra:
     name: Cluster EKS e rede
-    needs: [cluster, structurizr, email]
+    needs: [cluster, structurizr, email, mensageria, dynamodb-execucao]
     runs-on: ubuntu-latest
     environment: production
     timeout-minutes: 60

@@ -210,6 +210,117 @@ resource "newrelic_one_dashboard" "wrench" {
   }
 
   page {
+    name = "Saga"
+
+    widget_billboard {
+      title  = "Sagas no dia"
+      row    = 1
+      column = 1
+      width  = 4
+      height = 3
+
+      nrql_query {
+        account_id = var.newrelic_account_id
+        query      = "SELECT sum(saga.iniciada) AS 'Iniciadas', sum(saga.concluida) AS 'Concluídas', sum(saga.compensacao) AS 'Compensadas' FROM Metric WHERE ${local.filtro_saga} SINCE today"
+      }
+    }
+
+    widget_billboard {
+      title  = "Saúde da mensageria (24h)"
+      row    = 1
+      column = 5
+      width  = 4
+      height = 3
+
+      nrql_query {
+        account_id = var.newrelic_account_id
+        query      = "SELECT sum(saga.mensagem.falha) AS 'Falhas no consumo', sum(saga.mensagem.dlq) AS 'Mensagens na DLQ', sum(saga.timeout) AS 'Timeouts' FROM Metric WHERE ${local.filtro_saga} SINCE 1 day ago"
+      }
+
+      critical = 1
+      warning  = 0
+    }
+
+    widget_billboard {
+      title  = "Duração da Saga (minutos)"
+      row    = 1
+      column = 9
+      width  = 4
+      height = 3
+
+      nrql_query {
+        account_id = var.newrelic_account_id
+        query      = "SELECT average(saga.duracao) / 60000 AS 'Média', percentile(saga.duracao, 95) / 60000 AS 'p95' FROM Metric WHERE ${local.filtro_saga} SINCE 1 day ago"
+      }
+    }
+
+    widget_line {
+      title  = "Mensagens da Saga por tipo"
+      row    = 4
+      column = 1
+      width  = 8
+      height = 3
+
+      nrql_query {
+        account_id = var.newrelic_account_id
+        query      = "SELECT sum(saga.mensagem.recebida) FROM Metric WHERE ${local.filtro_saga} FACET tipo SINCE 1 day ago TIMESERIES 5 minutes"
+      }
+    }
+
+    widget_pie {
+      title  = "Desfecho das Sagas"
+      row    = 4
+      column = 9
+      width  = 4
+      height = 3
+
+      nrql_query {
+        account_id = var.newrelic_account_id
+        query      = "SELECT sum(saga.concluida) AS 'Concluída', sum(saga.compensacao) AS 'Compensada' FROM Metric WHERE ${local.filtro_saga} SINCE 7 days ago"
+      }
+    }
+
+    widget_bar {
+      title  = "Compensações por etapa"
+      row    = 7
+      column = 1
+      width  = 6
+      height = 3
+
+      nrql_query {
+        account_id = var.newrelic_account_id
+        query      = "SELECT sum(saga.compensacao) FROM Metric WHERE ${local.filtro_saga} FACET etapa SINCE 7 days ago"
+      }
+    }
+
+    widget_line {
+      title  = "Outbox pendente por serviço"
+      row    = 7
+      column = 7
+      width  = 6
+      height = 3
+
+      nrql_query {
+        account_id = var.newrelic_account_id
+        query      = "SELECT latest(saga.outbox.pendentes) FROM Metric WHERE ${local.filtro_saga} FACET service.name SINCE 3 hours ago TIMESERIES 1 minute"
+      }
+    }
+
+    widget_table {
+      title  = "Traces distribuídos da Saga (início ao fim da OS)"
+      row    = 10
+      column = 1
+      width  = 12
+      height = 4
+
+      nrql_query {
+        account_id = var.newrelic_account_id
+        query      = "SELECT trace.id, service.name, name, duration.ms, saga.ordemServicoId, saga.tipo FROM Span WHERE ${local.filtro_saga} AND name LIKE 'saga%' SINCE 1 day ago LIMIT 100"
+      }
+    }
+  }
+
+  page {
     name = "Kubernetes"
 
     widget_line {

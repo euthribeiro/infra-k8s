@@ -1,0 +1,34 @@
+name: Tabelas DynamoDB do Execução Service
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+
+jobs:
+  dynamodb:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Terraform Init
+        run: terraform -chdir=terraform/dynamodb-execucao init -input=false
+
+      - name: Terraform Apply
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          terraform -chdir=terraform/dynamodb-execucao apply -auto-approve -input=false \
+            -var="region_default=$AWS_REGION" \
+            -var="main_tags={Terraform=\"true\", Environment=\"$ENVIRONMENT\"}"

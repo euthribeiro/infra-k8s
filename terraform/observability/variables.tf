@@ -66,3 +66,15 @@ variable "taxa_erro_5xx_limite_percentual" {
   type        = number
   default     = 5
 }
+
+variable "servicos_saga" {
+  description = "Valores de service.name dos microsservicos que participam da Saga."
+  type        = list(string)
+  default     = ["wrench-auto-repair-api", "wrench-billing-api", "wrench-execucao-api"]
+}
+
+variable "saga_duracao_p95_limite_ms" {
+  description = "Limite do percentil 95 da duracao de ponta a ponta da Saga, em milissegundos."
+  type        = number
+  default     = 900000
+}

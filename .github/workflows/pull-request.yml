@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        stack: [infra, ecr, dns, email, structurizr, observability]
+        stack: [infra, ecr, dns, email, structurizr, observability, mensageria, dynamodb-execucao]
 
     steps:
       - name: Checkout

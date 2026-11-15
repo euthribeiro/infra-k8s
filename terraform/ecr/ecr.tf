@@ -1,5 +1,13 @@
 locals {
-  repos = ["api", "charts/wrench-api", "charts/structurizr"]
+  repos = [
+    "api",
+    "billing-api",
+    "execucao-api",
+    "charts/wrench-api",
+    "charts/wrench-billing",
+    "charts/wrench-execucao",
+    "charts/structurizr",
+  ]
 }
 
 resource "aws_ecr_repository" "wrench_repo" {

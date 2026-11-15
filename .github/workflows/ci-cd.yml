@@ -29,6 +29,20 @@ jobs:
     with:
       environment: 'production'
 
+  mensageria:
+    needs: main-infra
+    uses: ./.github/workflows/mensageria.yml
+    secrets: inherit
+    with:
+      environment: 'production'
+
+  dynamodb-execucao:
+    if: inputs.etapa != 'somente-dns'
+    uses: ./.github/workflows/dynamodb.yml
+    secrets: inherit
+    with:
+      environment: 'production'
+
   ses-infra:
     needs: main-infra
     uses: ./.github/workflows/ses.yml
