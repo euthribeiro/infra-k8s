@@ -336,9 +336,9 @@ consumidor** (ninguém lê a fila de outro):
                                │  filter policy no atributo "tipo"
             ┌──────────────────┴──────────────────┐
             ▼                                     ▼
-  SQS wrench-billing-commands           SQS wrench-execucao-commands
-  GerarOrcamento, CancelarOrcamento,    IniciarExecucao, CancelarExecucao
-  EstornarPagamento                                │
+  SQS wrench-billing-gerar-orcamento    SQS wrench-execucao-commands
+  SQS wrench-billing-cancelar-orcamento IniciarExecucao, CancelarExecucao
+  SQS wrench-billing-estornar-pagamento            │
             │                                      │
             ▼                                      ▼
       Billing Service                        Execução Service
@@ -360,7 +360,7 @@ movida para lá e o alerta **DLQ da Saga com mensagens** (stack `observability/`
 | `aws_sns_topic.eventos["os"]` | `wrench-os-events` | Comandos da Saga emitidos pelo OS Service |
 | `aws_sns_topic.eventos["billing"]` | `wrench-billing-events` | Eventos de orçamento, pagamento e estorno |
 | `aws_sns_topic.eventos["execucao"]` | `wrench-execucao-events` | `ExecucaoConcluida` e `ExecucaoFalhou` |
-| `aws_sqs_queue.fila` + `aws_sqs_queue.dlq` | `wrench-billing-commands`, `wrench-execucao-commands`, `wrench-os-saga` (+ `-dlq`) | Fila de entrada de cada consumidor |
+| `aws_sqs_queue.fila` + `aws_sqs_queue.dlq` | `wrench-billing-gerar-orcamento`, `wrench-billing-cancelar-orcamento`, `wrench-billing-estornar-pagamento`, `wrench-execucao-commands`, `wrench-os-saga` (+ `-dlq`) | Fila de entrada de cada consumidor |
 | `aws_sqs_queue_policy.fila` | — | Só os tópicos deste stack podem entregar nas filas |
 | `aws_sns_topic_subscription.fila` | — | Assinatura com `raw_message_delivery` e filtro por `tipo` |
 | `aws_iam_role.servico` | `wrench-os-mensageria`, `wrench-billing-mensageria`, `wrench-execucao-mensageria` | Role IRSA de cada serviço |

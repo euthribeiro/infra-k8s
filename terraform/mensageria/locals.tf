@@ -28,10 +28,20 @@ locals {
   # Uma fila (com DLQ) por consumidor. O filtro seleciona, no topico de origem,
   # apenas as mensagens que aquele consumidor sabe tratar.
   filas = {
-    billing = {
-      nome   = "${var.prefixo}-billing-commands"
+    billing_orcamento = {
+      nome   = "${var.prefixo}-billing-gerar-orcamento"
       topico = "os"
-      tipos  = ["GerarOrcamento", "CancelarOrcamento", "EstornarPagamento"]
+      tipos  = ["GerarOrcamento"]
+    }
+    billing_cancelamento = {
+      nome   = "${var.prefixo}-billing-cancelar-orcamento"
+      topico = "os"
+      tipos  = ["CancelarOrcamento"]
+    }
+    billing_estorno = {
+      nome   = "${var.prefixo}-billing-estornar-pagamento"
+      topico = "os"
+      tipos  = ["EstornarPagamento"]
     }
     execucao = {
       nome   = "${var.prefixo}-execucao-commands"
@@ -66,7 +76,11 @@ locals {
     billing = {
       service_account = "wrench-billing-sa"
       publica         = ["billing"]
-      consome         = ["${var.prefixo}-billing-commands"]
+      consome = [
+        "${var.prefixo}-billing-gerar-orcamento",
+        "${var.prefixo}-billing-cancelar-orcamento",
+        "${var.prefixo}-billing-estornar-pagamento"
+      ]
     }
     execucao = {
       service_account = "wrench-execucao-sa"
