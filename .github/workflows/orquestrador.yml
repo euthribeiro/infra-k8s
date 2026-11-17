@@ -36,7 +36,7 @@ jobs:
             echo "::error::Cadastre o secret ORQUESTRADOR_TOKEN no infra-k8s."
             exit 1
           fi
-          for repositorio in infra-k8s infra-db app-k8s lambda-auth; do
+          for repositorio in infra-k8s infra-db app-k8s lambda-auth billing-service execucao-service; do
             gh api "repos/$OWNER/$repositorio/actions/workflows" --jq '.total_count' > /dev/null
             echo "ok: $OWNER/$repositorio"
           done
@@ -64,8 +64,23 @@ jobs:
       - name: Disparar e aguardar
         run: bash "$DISPARAR" "$OWNER/infra-db" ci-cd.yml master
 
+  servicos-saga:
+    name: 3. Microsserviços da Saga
+    needs: [validar, infra-k8s, infra-db]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && (inputs.ambientes == 'ambos' || inputs.ambientes == 'production') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        repositorio: ['billing-service', 'execucao-service']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Disparar e aguardar
+        run: bash "$DISPARAR" "$OWNER/${{ matrix.repositorio }}" ci.yml main
+
   app-homologacao:
-    name: 3. Aplicação — homologação
+    name: 4. Aplicação — homologação
     needs: [validar, infra-k8s, infra-db]
     if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && (inputs.ambientes == 'ambos' || inputs.ambientes == 'homologacao') }}
     runs-on: ubuntu-latest
@@ -76,7 +91,7 @@ jobs:
         run: bash "$DISPARAR" "$OWNER/app-k8s" ci-cd.yml develop
 
   app-producao:
-    name: 4. Aplicação — produção
+    name: 5. Aplicação — produção
     needs: [validar, infra-k8s, infra-db, app-homologacao]
     if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && (inputs.ambientes == 'ambos' || inputs.ambientes == 'production') }}
     runs-on: ubuntu-latest
@@ -87,7 +102,7 @@ jobs:
         run: bash "$DISPARAR" "$OWNER/app-k8s" ci-cd.yml master
 
   grants-lambda:
-    name: 5. Grants de coluna da Lambda
+    name: 6. Grants de coluna da Lambda
     needs: [validar, infra-k8s, infra-db, app-homologacao, app-producao]
     if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
     runs-on: ubuntu-latest
@@ -121,7 +136,7 @@ jobs:
           bash "$DISPARAR" "$OWNER/infra-db" ci-cd.yml master
 
   lambda-auth:
-    name: 6. Lambda e API Gateway
+    name: 7. Lambda e API Gateway
     needs: [validar, grants-lambda]
     if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
     runs-on: ubuntu-latest
