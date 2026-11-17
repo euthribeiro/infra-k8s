@@ -78,6 +78,10 @@ jobs:
           ECR_REPOSITORY: ${{ inputs.structurizr_chart_repository }}
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
+          if helm show chart "oci://$ECR_REPOSITORY" --version "$VERSION" > /dev/null 2>&1; then
+            echo "Chart $VERSION ja publicado no ECR; push ignorado."
+            exit 0
+          fi
           helm package "$CHART_DIR" \
           --version "$VERSION" \
           --app-version "$VERSION"
