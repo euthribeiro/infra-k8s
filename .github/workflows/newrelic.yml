@@ -51,11 +51,16 @@ jobs:
           fi
           helm repo add newrelic https://helm-charts.newrelic.com
           helm repo update newrelic
+          CONFLITOS=""
+          if helm upgrade --help | grep -q -- "--force-conflicts"; then
+            CONFLITOS="--force-conflicts"
+          fi
           helm upgrade --install newrelic-bundle newrelic/nri-bundle \
             -n newrelic --create-namespace \
             -f "$VALUES_FILE" \
             --set global.cluster="$CLUSTER_NAME" \
             --set global.licenseKey="$NEW_RELIC_LICENSE_KEY" \
+            $CONFLITOS \
             --wait --timeout 10m
 
       - name: Verificar DaemonSet do agente
