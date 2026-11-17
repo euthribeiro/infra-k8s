@@ -37,7 +37,7 @@ jobs:
             echo "::error::Cadastre o secret ORQUESTRADOR_TOKEN no infra-k8s."
             exit 1
           fi
-          for repositorio in infra-k8s infra-db app-k8s lambda-auth; do
+          for repositorio in infra-k8s infra-db app-k8s lambda-auth billing-service execucao-service; do
             gh api "repos/$OWNER/$repositorio/actions/workflows" --jq '.total_count' > /dev/null
             echo "ok: $OWNER/$repositorio"
           done
@@ -57,9 +57,23 @@ jobs:
       - name: Disparar e aguardar
         run: bash "$DISPARAR" "$OWNER/lambda-auth" destroy.yml "${{ matrix.branch }}" -f confirmacao=DESTRUIR
 
-  app-k8s:
-    name: 2. Aplicação
+  servicos-saga:
+    name: 2. Microsserviços da Saga
     needs: [validar, lambda-auth]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        repositorio: ['billing-service', 'execucao-service']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Disparar e aguardar
+        run: bash "$DISPARAR" "$OWNER/${{ matrix.repositorio }}" destroy.yml main -f confirmacao=DESTRUIR
+
+  app-k8s:
+    name: 3. Aplicação
+    needs: [validar, servicos-saga]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -72,7 +86,7 @@ jobs:
         run: bash "$DISPARAR" "$OWNER/app-k8s" destroy.yml "${{ matrix.branch }}" -f confirmacao=DESTRUIR
 
   infra-db:
-    name: 3. Banco de dados
+    name: 4. Banco de dados
     needs: [validar, app-k8s]
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -88,7 +102,7 @@ jobs:
         run: bash "$DISPARAR" "$OWNER/infra-db" destroy.yml master -f confirmacao=DESTRUIR
 
   infra-k8s:
-    name: 4. Infraestrutura Kubernetes
+    name: 5. Infraestrutura Kubernetes
     needs: [validar, infra-db]
     runs-on: ubuntu-latest
     timeout-minutes: 150

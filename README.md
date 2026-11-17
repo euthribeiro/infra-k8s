@@ -205,23 +205,29 @@ dele.
 flowchart LR
     V["Validar token"] --> K["1. infra-k8s<br/>cluster, Gateway e DNS"]
     K --> D["2. infra-db<br/>RDS, databases e roles"]
-    D --> H["3. app-k8s<br/>develop"]
-    H --> P["4. app-k8s<br/>master"]
-    P --> G["5. infra-db<br/>grants da Lambda"]
-    G --> L["6. lambda-auth<br/>develop e master"]
+    D --> S["3. billing-service e execucao-service<br/>main"]
+    D --> H["4. app-k8s<br/>develop"]
+    H --> P["5. app-k8s<br/>master"]
+    P --> G["6. infra-db<br/>grants da Lambda"]
+    G --> L["7. lambda-auth<br/>develop e master"]
 ```
 
 | Entrada | Valores | Efeito |
 |---|---|---|
-| `ambientes` | `ambos`, `homologacao`, `production` | Quais ambientes da aplicação e da Lambda são implantados |
-| `infraestrutura` | `true`, `false` | Com `false`, pula as etapas 1 e 2 e implanta só aplicação, grants e Lambda |
+| `ambientes` | `ambos`, `homologacao`, `production` | Quais ambientes da aplicação e da Lambda são implantados; os microsserviços da Saga só têm produção e são pulados com `homologacao` |
+| `infraestrutura` | `true`, `false` | Com `false`, pula as etapas 1 e 2 e implanta só microsserviços, aplicação, grants e Lambda |
 
 Restrições:
 
 * A ordem é imposta pelos states do HCP Terraform: o `infra-db` lê a rede do `infra-k8s`, a
   aplicação lê cluster e banco, e a Lambda lê o banco e depende das tabelas criadas pelas
   migrations de cada ambiente.
-* A etapa 5 grava `true` em `LAMBDA_AUTH_GRANTS_PRODUCTION` e/ou `LAMBDA_AUTH_GRANTS_HOMOLOGACAO`
+* A etapa 3 dispara o `ci.yml` do `billing-service` e do `execucao-service` na branch `main`, em
+  paralelo com a aplicação: os dois publicam em filas e tópicos, então a ordem entre eles e o
+  orquestrador da Saga não importa. Cada `ci.yml` roda build, testes, cobertura, SonarCloud e, por
+  ter sido disparado em `main`, o deploy de produção. Uma falha ali não bloqueia os grants nem a
+  Lambda, mas marca a execução como vermelha.
+* A etapa 6 grava `true` em `LAMBDA_AUTH_GRANTS_PRODUCTION` e/ou `LAMBDA_AUTH_GRANTS_HOMOLOGACAO`
   no `infra-db`, conforme os ambientes implantados, e só reaplica os roles quando alguma variable
   mudou ou quando a etapa 2 não rodou. Persistir o valor impede que um push posterior no
   `infra-db` revogue os grants.
@@ -230,9 +236,10 @@ Restrições:
 * Os dois orquestradores compartilham o grupo de concorrência `orquestrador-ambiente`: nunca rodam
   ao mesmo tempo.
 * O secret `ORQUESTRADOR_TOKEN` é um *fine-grained personal access token* restrito aos repositórios
-  `infra-k8s`, `infra-db`, `app-k8s` e `lambda-auth`, com as permissões **Actions: Read and write**,
-  **Variables: Read and write** e **Contents: Read-only**. O `GITHUB_TOKEN` padrão não dispara
-  workflows em outros repositórios.
+  `infra-k8s`, `infra-db`, `app-k8s`, `lambda-auth`, `billing-service` e `execucao-service`, com
+  as permissões **Actions: Read and write**, **Variables: Read and write** e
+  **Contents: Read-only**. O `GITHUB_TOKEN` padrão não dispara workflows em outros
+  repositórios.
 
 ## Orquestrador de destruição
 
@@ -242,9 +249,10 @@ ambiente na ordem inversa do provisionamento, disparando o `destroy.yml` de cada
 ```mermaid
 flowchart LR
     V["Validar confirmação"] --> L["1. lambda-auth<br/>develop e master"]
-    L --> A["2. app-k8s<br/>develop e master"]
-    A --> D["3. infra-db<br/>grants desligados, roles e RDS"]
-    D --> K["4. infra-k8s<br/>plataforma e cluster"]
+    L --> S["2. billing-service e execucao-service<br/>main"]
+    S --> A["3. app-k8s<br/>develop e master"]
+    A --> D["4. infra-db<br/>grants desligados, roles e RDS"]
+    D --> K["5. infra-k8s<br/>plataforma e cluster"]
 ```
 
 | Entrada | Valor | Efeito |
@@ -254,11 +262,14 @@ flowchart LR
 Restrições:
 
 * Cada `destroy.yml` disparado recebe `confirmacao=DESTRUIR`.
-* A etapa 3 grava `false` em `LAMBDA_AUTH_GRANTS_PRODUCTION` e `LAMBDA_AUTH_GRANTS_HOMOLOGACAO` antes
+* A etapa 2 desinstala os releases `wrench-billing` e `wrench-execucao` do namespace `production`,
+  sem apagar o namespace. Ela vem antes da aplicação porque o `destroy.yml` do `app-k8s` remove o
+  namespace inteiro e o deste repositório se recusa a rodar enquanto ele existir.
+* A etapa 4 grava `false` em `LAMBDA_AUTH_GRANTS_PRODUCTION` e `LAMBDA_AUTH_GRANTS_HOMOLOGACAO` antes
   de destruir o banco, para que o próximo provisionamento não tente conceder grants em tabelas que
   ainda não existem.
-* A Lambda e a aplicação saem antes do banco e da plataforma: as rotas deixam de existir antes do
-  ALB, e nenhum recurso do cluster fica preso a uma VPC em remoção.
+* A Lambda, os microsserviços e a aplicação saem antes do banco e da plataforma: as rotas deixam
+  de existir antes do ALB, e nenhum recurso do cluster fica preso a uma VPC em remoção.
 * O `destroy.yml` deste repositório recusa rodar enquanto existirem os namespaces `production` ou
   `homologacao` no cluster, porque rotas e volumes da aplicação precisam sair antes do cluster.
 * Os CNAMEs saem antes do Gateway, porque o stack `dns/` localiza o ALB pelas tags do cluster.
