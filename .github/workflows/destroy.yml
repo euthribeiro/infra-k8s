@@ -109,8 +109,14 @@ jobs:
             NAMESPACE="${alvo%%/*}"
             RELEASE="${alvo##*/}"
             if helm status "$RELEASE" -n "$NAMESPACE" > /dev/null 2>&1; then
-              helm uninstall "$RELEASE" -n "$NAMESPACE" --wait --timeout 10m
-              echo "- Release \`$RELEASE\` removido do namespace \`$NAMESPACE\`." >> "$GITHUB_STEP_SUMMARY"
+              if helm uninstall "$RELEASE" -n "$NAMESPACE" --ignore-not-found --wait --timeout 10m; then
+                echo "- Release \`$RELEASE\` removido do namespace \`$NAMESPACE\`." >> "$GITHUB_STEP_SUMMARY"
+              elif helm status "$RELEASE" -n "$NAMESPACE" > /dev/null 2>&1; then
+                echo "::error::Falha ao remover o release $RELEASE no namespace $NAMESPACE."
+                exit 1
+              else
+                echo "- Release \`$RELEASE\` já não existe no namespace \`$NAMESPACE\`; registro do Helm removido junto com os recursos." >> "$GITHUB_STEP_SUMMARY"
+              fi
             fi
             kubectl delete namespace "$NAMESPACE" --ignore-not-found --wait --timeout=10m
           done
